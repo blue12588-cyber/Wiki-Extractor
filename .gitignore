@@ -1,56 +1,48 @@
-# --- Node / SvelteKit ---
+# Node / npm
 node_modules/
+npm-debug.log*
+.npm/
+
+# SvelteKit / Vite build outputs (regenerated from source)
 .svelte-kit/
 build/
-.vite/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+.output/
+.vercel/
+.netlify/
+.wrangler/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
 
-# --- Rust / Cargo / Tauri ---
+# Rust / Cargo
 src-tauri/target/
-target/
-**/*.rs.bk
+sidecar/target/
 
-# --- OS / Editor ---
+# Tauri build artifacts (binaries, installers)
+src-tauri/gen/
+src-tauri/WixTools/
+
+# Runtime data — install-folder-relative; never check in
+data/
+
+# OS junk
 .DS_Store
 Thumbs.db
-Desktop.ini
-.idea/
+desktop.ini
+
+# Env files (keep examples committed)
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Editor / IDE
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+.idea/
 *.swp
 *.swo
 
-# --- Build outputs ---
-dist/
-out/
-bundle/
-
-# --- Test outputs ---
-playwright-report/
-test-results/
-coverage/
-
-# --- Local env / secrets ---
-.env
-.env.local
-.env.*.local
-.envrc
-
-# --- App-local data (must stay LOCAL, never committed) ---
-# llmwiki app writes user data under data/ — never tracked
-data/
-data-*/
-
-# --- Tauri runtime caches that occasionally leak ---
-src-tauri/.cargo/
-src-tauri/WixTools/
-
-# --- Lockfile policy ---
-# We DO commit package-lock.json and Cargo.lock per AC-LOCKFILE.
-# We DO NOT commit yarn.lock or pnpm-lock.yaml in slice-1.
-yarn.lock
-pnpm-lock.yaml
+# Logs
+*.log
+logs/
