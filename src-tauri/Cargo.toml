@@ -39,3 +39,10 @@ base64 = "0.22"
 # backend is required; `json` is the only feature we add. This matches the
 # already-locked reqwest 0.13.3 resolution and avoids lockfile churn.
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
+# Slice 5c AC-OAUTH-PROXY: the openai-oauth child is spawned via tokio's async
+# process API (ima2 oauthLauncher pattern). tokio is already resolved as a
+# transitive tauri dependency (Cargo.lock pins 1.52.3); declaring it directly
+# only ENABLES the features we use (process spawn, async line-reader, timeout,
+# select! macro) — Cargo feature unification reuses the locked version, so this
+# adds no new crate to the lockfile.
+tokio = { version = "1", default-features = false, features = ["process", "io-util", "time", "macros", "rt"] }

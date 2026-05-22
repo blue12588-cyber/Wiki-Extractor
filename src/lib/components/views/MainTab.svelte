@@ -29,9 +29,15 @@
     bridgeKnownChunkIds,
   } from '$lib/pipeline/actions';
 
+  import { autoModeActive } from '$lib/llm/modeStore.svelte';
+
   // Slice 5b — derive the open bridge panel's inputs from the store.
   let bridgeInput = $derived(pipeline.bridgeCandidateId ? bridgePromptInput() : null);
   let knownChunkIds = $derived(bridgeKnownChunkIds());
+  // Slice 5c — the bridge runs in auto mode only when the user has opted in AND
+  // codex is available (effective mode). Otherwise it is the pure 5b copy-paste
+  // bridge (无损). `autoModeActive` collapses an unavailable selection to offline.
+  let autoMode = $derived(autoModeActive());
 
   let upload_zone: ReturnType<typeof UploadZone> | null = null;
 
@@ -113,6 +119,7 @@
     <BridgePanel
       input={bridgeInput}
       {knownChunkIds}
+      {autoMode}
       onimport={importBridgeCandidate}
       onclose={closeBridge}
     />

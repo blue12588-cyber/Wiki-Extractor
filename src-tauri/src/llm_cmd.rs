@@ -334,6 +334,39 @@ pub async fn llm_translate(args: TranslateArgs) -> Result<String, LlmError> {
     chat_completion(TRANSLATE_SYSTEM_PROMPT, user).await
 }
 
+/* ---------------- Slice 5c — auto-LLM wiki extraction ---------------- */
+
+/// Thin system framing for the auto path. The FULL role/no-guess/Catholic/
+/// chunk_id-binding instructions and the output JSON shape live inside the
+/// renderer-built prompt (`src/lib/bridge/promptBuilder.buildPrompt`), which is
+/// BYTE-IDENTICAL to the copy-paste prompt. This system message only reinforces
+/// "obey the embedded instructions, output JSON only" so the same prompt that a
+/// user pastes into chatgpt.com is what the auto path sends. Reusing the 5b
+/// prompt verbatim is what makes the downstream validator (anti-forgery gate)
+/// applicable unchanged (AC-AUTO-EXTRACT + AC-EVIDENCE-REUSE).
+const AUTO_WIKI_SYSTEM_PROMPT: &str = r#"You follow the embedded instructions in the user message exactly. The user message contains a [CANDIDATE], [SCHEMA], [CANDIDATE_CHUNKS], and [OUTPUT_FORMAT] block. Do not guess. Every evidence chunk_id you cite MUST be one of the chunk_ids present in [CANDIDATE_CHUNKS] (never invent a chunk_id). Use Catholic Korean terminology. Output ONLY the JSON object described in [OUTPUT_FORMAT] (the {"wiki_candidates":[...]} shape); no prose."#;
+
+#[derive(Deserialize)]
+pub struct ExtractWikiArgs {
+    /// The renderer-built copy-paste prompt (promptBuilder.buildPrompt output)
+    /// for ONE candidate. Sent verbatim so the auto path is identical to the
+    /// manual paste path — the SAME validator binds the response.
+    pub prompt: String,
+}
+
+/// AC-AUTO-EXTRACT: send the 5b copy-paste prompt to the OAuth/LLM loopback and
+/// return the RAW model text. The renderer parses it with the 5b responseParser
+/// and validates it with the 5b responseValidator (chunk_id anti-forgery gate),
+/// then imports via the 5b wikiImport — i.e. the auto path automates the manual
+/// paste while reusing the exact same trust boundary.
+///
+/// On any auth/call failure this returns a `degraded` LlmError; the renderer
+/// then falls back to the copy-paste bridge (AC-GRACEFUL). The app never dies.
+#[tauri::command]
+pub async fn llm_extract_wiki(args: ExtractWikiArgs) -> Result<String, LlmError> {
+    chat_completion(AUTO_WIKI_SYSTEM_PROMPT, args.prompt).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

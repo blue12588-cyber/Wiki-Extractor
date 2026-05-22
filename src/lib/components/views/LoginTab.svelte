@@ -14,6 +14,7 @@
 <script lang="ts">
   import AuthStateIndicator from '$lib/components/AuthStateIndicator.svelte';
   import DisclosureBanner from '$lib/components/DisclosureBanner.svelte';
+  import ModeToggle from '$lib/components/ModeToggle.svelte';
   import { authState } from '$lib/auth/store';
 
   // Banner stays mounted while auth features are reachable on this machine.
@@ -23,15 +24,19 @@
 <section class="block">
   <h2 class="section-title">로그인 · 인증 상태</h2>
   <p class="section-lede">
-    이 앱은 로컬 Codex / ChatGPT 인증을 사용해 LLM 기능을 동작시킵니다. 아래에서
-    현재 인증 상태를 확인하고, 법적·보안 고지를 반드시 읽어 주세요. (피드백 보내기는
-    로그인 없이도 사용할 수 있습니다.)
+    이 앱은 기본적으로 <strong>복붙 모드</strong>(ChatGPT 직접 호출 없음)로 동작하며,
+    누구나 인증 없이 위키 후보를 정리할 수 있습니다. codex CLI를 직접 설치·로그인한
+    고급 사용자는 아래에서 <strong>자동 LLM 모드</strong>를 켜서 추출을 자동화할 수
+    있습니다. 법적·보안 고지를 반드시 읽어 주세요. (피드백 보내기는 로그인 없이도
+    사용할 수 있습니다.)
   </p>
 
   <div class="state-row">
     <span class="state-label">현재 인증 상태</span>
     <AuthStateIndicator state={$authState} />
   </div>
+
+  <ModeToggle />
 
   <DisclosureBanner {auth_reachable} />
 </section>

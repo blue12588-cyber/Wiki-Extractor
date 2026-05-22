@@ -261,8 +261,46 @@ The four bridge modules (`promptBuilder`, `responseParser`, `responseValidator`,
 
 New smoke scenarios (in `fixtures/t1-slice5b-smoke.mjs`): `source-scope`, `rejected-evidence`, `fallback-refusal`; `evidence-bind` was extended to assert the forged ref is quarantined off `evidence`. All 10 slice5b scenarios + slice3/4/5a regression + static-scan green; svelte-check 0 errors (1 pre-existing node-types warning); tauri build exit 0.
 
+## Slice 5c — hybrid auto-LLM mode (codex + openai-oauth, ima2 pattern ported)
+
+**Status**: SUBSTANTIVE (Slice 5c, run `run_20260523_000007_sw_llmwiki_slice5c`). Adds the advanced/auto-LLM provider on top of the 5b copy-paste bridge. Default stays copy-paste (common-person); auto LLM is an opt-in for codex-authenticated advanced users. Write scope: `D:\AI Project\llmwiki\**` only; harness-core read-only (this run writes 0 to harness-core). codex `~/.codex/auth.json` is READ-ONLY detection only (never written/parsed). Network in auto mode is the openai-oauth loopback proxy (127.0.0.1) only; copy-paste mode = 0.
+
+### Adapted source (ima2-gen, NOT harness-core)
+
+The OAuth machinery is ported from `ima2-gen` (`D:\AI Tools\npm-global\node_modules\ima2-gen\lib`), not from harness-core. Recorded here for traceability since it crosses the project boundary:
+
+- `ima2-gen/lib/codexDetect.js` (file-presence OR `codex login status` probe; "file absence ≠ unauth" because auth may live in the OS keyring) → `src-tauri/src/codex_detect.rs`. **Adapted**: the auth-path resolution is NOT duplicated — it is delegated to the existing AC-7-relaxed module `external_dep_paths::auth_file_present` (the SOLE module allowed to touch `~/.codex`), so `codex_detect.rs` introduces ZERO forbidden OS-user-dir tokens (T1-static-scan clean). The probe runs `codex login status` with stdio fully ignored (read-only), bounded by a 2.5s timeout so a hung binary cannot stall the auth poll. `available = auth_file_present || probe==authed`.
+- `ima2-gen/lib/oauthLauncher.js` (`startOAuthProxy`: spawn `npx openai-oauth --port <P>`, parse ready URL from stdout, restart-on-exit) → the Round-2 spawn body of `src-tauri/src/oauth_child.rs::spawn_oauth_child`. **Adapted**: the Round-1 scaffold's `parse_ready_line` + `ChildStatus` + `oauth_child_status` command are now backed by a real `tokio::process` spawn that scans stdout AND stderr for the loopback `/v1` ready line, with a 12s timeout → `ReadyLineGrammarMismatch` (orchestrator stop_condition) and early-exit/spawn-error → `Degraded` (graceful). ima2's infinite restart-on-exit loop is intentionally NOT ported — a single bounded attempt is contract-aligned (a missing ready line routes to a stop_condition rather than spinning).
+- `ima2-gen/lib/oauthProxy.js` (`generateViaOAuth`: POST to `http://127.0.0.1:<port>/v1/responses`, SSE stream) → the transport shape reused in `src-tauri/src/llm_cmd.rs::chat_completion` (already wired in Slice 3 against the loopback `/v1` base resolved from `oauth_child_status`). **Adapted**: ima2 streams an *image* result; llmwiki needs *text* extraction, so the new `llm_extract_wiki` command posts the 5b prompt and returns the raw model TEXT (no image/SSE-image parsing). The model id + endpoint template stay in `src-tauri/llm.config.json` (single source).
+
+### Provider abstraction (AC-AUTH-ABSTRACT + AC-ENCAPSULATE)
+
+The openai-oauth/codex/ima2 details are encapsulated entirely behind one interface (`src/lib/llm/provider.ts::ExtractionProvider`). Three providers: `offline` (copy-paste, 5b — default, always available, zero network), `codex_oauth_proxy` (auto, available when codex detected), `future` (API-key placeholder, never available). The rest of the app (`BridgePanel`, `MainTab`, `ModeToggle`) talks only to `ProviderId` + `ExtractionProvider`, so removing/swapping the codex path is a localized change. `src/lib/llm/registry.ts` maps id→instance; `src/lib/llm/modeStore.svelte.ts` holds the detect snapshot + the user's selected mode (default `offline`; an unavailable selection collapses to `offline` via `effectiveProviderId()`).
+
+### Anti-forgery gate REUSED, not re-implemented (AC-EVIDENCE-REUSE)
+
+`src/lib/llm/autoExtract.ts` is the single seam: it runs the SAME 5b pipeline — `buildPrompt` → `provider.runExtraction` → `parseResponse` → `validateResponse(parsed, knownChunkIds)` — so an auto LLM reply is bound by the IDENTICAL chunk_id anti-forgery validator a manual paste uses. A hallucinated chunk_id from the auto LLM is rejected exactly like a forged one from a manual paste; the validator and the original-text-preserving import (`buildEntryFromValidated`) are imported UNCHANGED. The `T1-slice5c auto-evidence-reuse` + `auto-import-preserve` scenarios assert this.
+
+### Graceful degradation (AC-GRACEFUL)
+
+Every auto failure path (no Tauri shell / codex absent / proxy not ready / call failed / malformed reply) returns a `degraded` result with a Korean message; the caller falls back to the 5b copy-paste UI. `ExtractionProvider.runExtraction` and `autoExtractCandidate` NEVER throw and NEVER yield importable data on failure. The common-person always has copy-paste. The `T1-slice5c auto-graceful` + `offline-provider-noop` scenarios assert no-throw + degraded-Korean + no-importable-leak.
+
+### Dependency note (lockfile)
+
+`src-tauri/Cargo.toml` adds an explicit `tokio` dependency with features `process`, `io-util`, `time`, `macros`, `rt` (for the async child spawn + line-reader + `select!` timeout). tokio was already a transitive tauri dependency pinned at 1.52.3; declaring it directly only ENABLES features (Cargo feature unification reuses the locked version). The lockfile gained three feature-deps (`tokio-macros`, `signal-hook-registry`, `errno`) — feature-driven additions, not a version change.
+
+### What was NOT adapted (Slice 5c)
+
+- ima2's image-generation prompt/SSE pipeline (REAL_PERSON_RESEARCH_DIRECTIVE, partial-image streaming, multimode) — llmwiki does text extraction only.
+- ima2's infinite restart-on-exit proxy loop — replaced with a single bounded spawn + graceful degrade.
+- API-key provider — `future` is a never-available placeholder only (contract: contract_refresh_required_when API key mode is actually implemented).
+- Bundling codex/Node into the app — advanced users supply their own (contract exclude).
+
+New smoke scenarios (`fixtures/t1-slice5c-smoke.mjs`): `provider-availability`, `auto-evidence-reuse`, `auto-graceful`, `offline-provider-noop`, `auto-import-preserve`, `encapsulation-scan`, `ready-line-parse` — all green. 5b regression (all 10 scenarios) + static-scan green; svelte-check 0 errors (1 pre-existing node-types warning); 20 Rust lib tests pass (4 new codex_detect); live `codex login status` exit 0 + live `npx openai-oauth` spawn returned `http://127.0.0.1:<port>/v1` with `GET /v1/models` HTTP 200 (codex-oauth model list); tauri build exit 0 (app.exe + msi + nsis bundled).
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 5c, run `run_20260523_000007_sw_llmwiki_slice5c`).
 - `agreed_contract.json` (Slice 5b, run `run_20260523_000006_sw_llmwiki_slice5b`).
 - `agreed_contract.json` (Slice 5a, run `run_20260523_000005_sw_llmwiki_slice5a`).
 - `agreed_contract.json` (Slice 3, run `run_20260520_000003_sw_llmwiki_slice3`).
