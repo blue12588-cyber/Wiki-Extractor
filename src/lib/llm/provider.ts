@@ -95,6 +95,49 @@ export interface CodexDetectSnapshot {
 }
 
 /**
+ * Outcome of a `codex login` button press (Slice 6). Mirrors the Rust
+ * `LoginOutcome` enum (serde tag `state`). Every variant is non-fatal: the
+ * renderer shows the Korean message and the app stays usable in copy-paste mode
+ * regardless (AC-GRACEFUL). On `authed`/`not_authed` the refreshed read-only
+ * detect snapshot is carried so the login tab can flip state
+ * (AC-LOGIN-STATE-REFRESH). The app NEVER writes the auth file — codex does.
+ */
+export type CodexLoginOutcome =
+  | { state: 'authed'; detect: CodexDetectSnapshot }
+  | { state: 'not_authed'; detect: CodexDetectSnapshot; message: string }
+  | { state: 'pending'; message: string; verification: string | null }
+  | { state: 'cli_missing'; message: string }
+  | { state: 'failed'; message: string };
+
+/**
+ * Press the ChatGPT-login button: spawn `codex login` (browser OAuth, or
+ * `--device-auth` device-code when `deviceAuth`). codex performs the OAuth round
+ * trip and writes `~/.codex/auth.json`; THIS app only spawns the CLI and reads
+ * back the (read-only) detection. Outside the Tauri shell (Vite preview) the
+ * button cannot spawn anything, so we return a graceful `failed` outcome with a
+ * Korean message. NEVER throws.
+ */
+export async function startCodexLogin(deviceAuth = false): Promise<CodexLoginOutcome> {
+  const invoke = resolveInvoke();
+  if (!invoke) {
+    return {
+      state: 'failed',
+      message:
+        'Tauri 셸 외부(미리보기)에서는 ChatGPT 로그인을 시작할 수 없습니다. 설치된 앱에서 [ChatGPT로 로그인]을 눌러 주세요. 복붙 모드는 미리보기에서도 그대로 동작합니다.',
+    };
+  }
+  try {
+    return await invoke<CodexLoginOutcome>('codex_login_start', { deviceAuth });
+  } catch {
+    return {
+      state: 'failed',
+      message:
+        'ChatGPT 로그인을 시작하지 못했습니다. 복붙 모드로 모든 기능을 그대로 쓸 수 있습니다(앱은 계속 동작합니다).',
+    };
+  }
+}
+
+/**
  * Read the codex detection snapshot (READ-ONLY). Outside Tauri (Vite preview)
  * returns an unavailable snapshot so the offline provider is the only one — the
  * safe default. Never throws.

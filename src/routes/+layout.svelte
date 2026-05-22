@@ -79,6 +79,8 @@
                 <svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="5.5" /></svg>
               {:else if tab.shape === 'key'}
                 <svg viewBox="0 0 16 16" width="14" height="14"><circle cx="6" cy="6" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6" /><path d="M8.2 8.2 L13 13 M11 11 L13 9.5 M12 12 L13.5 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+              {:else if tab.shape === 'book'}
+                <svg viewBox="0 0 16 16" width="14" height="14"><path d="M2.5 3 H7 a1 1 0 0 1 1 1 v9 a1 1 0 0 0 -1 -1 H2.5 z M13.5 3 H9 a1 1 0 0 0 -1 1 v9 a1 1 0 0 1 1 -1 H13.5 z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" /></svg>
               {:else}
                 <svg viewBox="0 0 16 16" width="14" height="14"><path d="M2.5 3.5 h11 a1 1 0 0 1 1 1 v6 a1 1 0 0 1 -1 1 H7 l-3 2.5 V12.5 H2.5 a1 1 0 0 1 -1 -1 v-6 a1 1 0 0 1 1 -1 z" /></svg>
               {/if}
@@ -113,6 +115,9 @@
     display: grid;
     grid-template-columns: 220px 1fr;
     min-height: 100vh;
+    /* No horizontal overflow: the grid track is fixed (220px) + 1fr; the content
+       column owns its own wrapping. (AC-STICKY-SIDEBAR: 가로 스크롤 0) */
+    overflow-x: hidden;
   }
 
   .sidebar {
@@ -122,6 +127,17 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-xl);
+    /* AC-STICKY-SIDEBAR: the sidebar stays pinned to the top of the viewport so
+       every tab is always visible + clickable no matter how far the main
+       content scrolls. `align-self: start` keeps the sticky box from being
+       stretched to the full grid-row height (which would defeat sticky); the
+       capped height + internal scroll handle a viewport shorter than the tab
+       list without ever clipping a tab off-screen. */
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
   }
 
   .brand {

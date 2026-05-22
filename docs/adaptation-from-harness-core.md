@@ -298,8 +298,109 @@ Every auto failure path (no Tauri shell / codex absent / proxy not ready / call 
 
 New smoke scenarios (`fixtures/t1-slice5c-smoke.mjs`): `provider-availability`, `auto-evidence-reuse`, `auto-graceful`, `offline-provider-noop`, `auto-import-preserve`, `encapsulation-scan`, `ready-line-parse` — all green. 5b regression (all 10 scenarios) + static-scan green; svelte-check 0 errors (1 pre-existing node-types warning); 20 Rust lib tests pass (4 new codex_detect); live `codex login status` exit 0 + live `npx openai-oauth` spawn returned `http://127.0.0.1:<port>/v1` with `GET /v1/models` HTTP 200 (codex-oauth model list); tauri build exit 0 (app.exe + msi + nsis bundled).
 
+## Slice 6 — codex login button + sticky sidebar + usage tab
+
+**Status**: SUBSTANTIVE (Slice 6, run `run_20260523_000008_sw_llmwiki_slice6`). Adds
+three things on top of the 5c hybrid: (1) a GUI **[ChatGPT로 로그인]** button that
+spawns `codex login` (browser ChatGPT OAuth — no CLI typing), (2) a `position:sticky`
+sidebar so the tabs stay visible while the main content scrolls, and (3) a fifth
+**사용법** tab (between 로그인 and 피드백) with step-by-step guidance for non-experts.
+Default stays copy-paste; codex login is opt-in for advanced users. Write scope:
+`D:\AI Project\llmwiki\**` only; harness-core read-only (this run writes 0 to
+harness-core).
+
+### Upstream pin (Slice 6)
+
+- **upstream repository**: `harness-core` (read-only; `\\wsl.localhost\ubuntu-24.04\home\user\harness-core`).
+- **upstream HEAD observed at Slice 6 start**: `b381f880dd5b2d572c8191cbc79254bfada56833` (a parallel SW gate track may advance this during the run; that is external and is NOT a Slice-6 write — the invariant is that THIS run touches nothing under the harness-core working tree).
+- **upstream branch**: `master`.
+- **write policy**: zero writes outside `D:\AI Project\llmwiki\**` and `runs/<run_id>/`. AC-9 pre/post HEAD equality holds.
+
+### App-auth-write-0 (HARD boundary — the central Slice-6 invariant)
+
+The login button **spawns `codex login` only**; the app NEVER opens, reads,
+parses, copies, or writes the codex auth file. codex performs the browser OAuth
+round trip and writes `~/.codex/auth.json` itself, OUTSIDE this app's tree. The
+new `src-tauri/src/codex_login.rs` therefore (a) contains ZERO file-write APIs,
+(b) does NOT reference the `auth.json` path literal in code (only the boundary
+doc-comment mentions it), and (c) introduces ZERO AC-7-relaxed OS-user-dir tokens
+— it delegates the post-login read-only re-detect to `codex_detect::detect_codex`,
+which in turn delegates the only auth-path stat to `external_dep_paths` (the SOLE
+AC-7-relaxed module). The `T1-slice6 login-no-authwrite` scenario asserts all three
+statically (pulling the forbidden-token pattern from the Rust sentinel so the
+fixture itself stays T1-static-scan clean).
+
+### Adapted source (ima2-gen / codex CLI, NOT harness-core)
+
+The login-spawn pattern continues the Slice-5c ima2 lineage (recorded for
+cross-boundary traceability):
+
+- `codex` CLI `login` subcommand (browser ChatGPT OAuth; `--device-auth` device-code
+  variant) → `src-tauri/src/codex_login.rs::spawn_codex_login`. **Adapted** from the
+  oauth_child spawn convention (Windows `cmd /C` shim resolution, piped stdout/stderr
+  line scan, `tokio::process` + `select!` bounded wait). The wait is generous (150s,
+  human-paced browser OAuth) but finite → on expiry we return a graceful `Pending`
+  (NOT a kill: the codex child finishes in the background and the user re-checks with
+  the existing "다시 검출"), so the app never blocks. A device-code/URL line emitted by
+  codex is surfaced to the user as Korean guidance (`looks_like_verification`
+  heuristic; the auth TOKEN is written by codex to auth.json and never printed on
+  this path). The `--device-auth` flag was verified to exist in the installed codex
+  build.
+
+### Provider/state abstraction reuse (AC-LOGIN-STATE-REFRESH)
+
+The button is wired through the SAME provider/store seam as 5c: a new
+`provider.ts::startCodexLogin` (typed wrapper over the `codex_login_start` Rust
+command, mirroring the `LoginOutcome` serde enum) + a `modeStore.svelte.ts::
+loginWithChatGPT` action. On an `authed` outcome the action applies the carried
+read-only detect snapshot so the login tab flips unauthed→authed and the auto-mode
+radio becomes selectable — it does NOT auto-select auto mode (the user still opts
+in; only AVAILABILITY changes). On `pending` it runs a read-only `refreshDetect()`
+so a meanwhile-completed flow is picked up. `cli_missing`/`failed` show a Korean
+message only; copy-paste stays the default. Every path is non-throwing and ends
+with a Korean `loginMessage` (AC-GRACEFUL + AC-KOREAN-UI).
+
+### Sticky sidebar (AC-STICKY-SIDEBAR)
+
+`+layout.svelte` `.sidebar` becomes `position:sticky; top:0; align-self:start;
+max-height:100vh; overflow-y:auto`. `align-self:start` is the load-bearing detail:
+without it the grid row stretches the sidebar to full content height and sticky has
+nothing to stick within. The capped height + internal scroll handle a viewport
+shorter than the tab list without clipping a tab off-screen. `.app-shell` gains
+`overflow-x:hidden` (가로 스크롤 0). Pure CSS; no JS scroll listener.
+
+### Usage tab (AC-USAGE-TAB) — non-expert audience
+
+`src/lib/components/views/UsageTab.svelte` is a pure read-only guidance screen (no
+state/network/persistence). Four numbered steps (①원서 넣기 → ②후보 자동 추출 →
+③ChatGPT로 정리 → ④위키 검토·저장). Step ③ splits into two branches presented as
+equivalent: **방법 A 복사·붙여넣기 (기본·누구나)** and **방법 B 자동 처리 (선택·로그인하면)**,
+with an explicit "로그인하지 않아도 방법 A로 모두 쓸 수 있다" (codex 강요 0). Internal
+jargon (oauth/tauri/chunk_id/openai-oauth/svelte) is kept OUT of the copy — the
+`T1-slice6 usage-content` scenario asserts its absence. `tabs.ts` adds the `usage`
+tab between `login` and `feedback` with a distinct `book` shape glyph (color-blind
+cue preserved); the Slice-4 nav fixture's 4-tab order assertion is EVOLVED to the
+Slice-6 5-tab order (the contract supersedes it).
+
+### What was NOT adapted (Slice 6)
+
+- Auto-installing codex for users without it — `cli_missing` shows guidance only (contract: codex 강요 0; 기본 복붙).
+- Guaranteeing real OAuth success — the spawn is wired; a cancelled/blocked browser flow is graceful degradation to copy-paste, not a crash (contract: 작동 미보장).
+- API-key login (`--with-api-key` exists in codex) — out of scope (`future` placeholder; contract_refresh_required_when API key mode is implemented).
+- Korean-izing the pinned English `DisclosureBanner` legal phrases (unchanged Slice-3 scoped exception).
+
+New smoke scenarios (`fixtures/t1-slice6-smoke.mjs`): Tier-1 `tab-order-usage`,
+`sticky-sidebar-css`, `login-spawn-graceful`; Tier-2 `usage-content`,
+`login-no-authwrite`, `login-button-wired` — all green. Slice 5c (7) + 5b (10) +
+nav (2, evolved to 5-tab) + static-scan regression green; svelte-check 0 errors
+(1 pre-existing node-types warning); 24 Rust lib tests pass (4 new codex_login).
+Live D-class on this PC: `codex login status` → "Logged in using ChatGPT" exit 0,
+`~/.codex/auth.json` present (mtime predates this run — app wrote 0), `codex login
+--device-auth` flag confirmed present. tauri build: see implementation_manifest.
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 6, run `run_20260523_000008_sw_llmwiki_slice6`).
 - `agreed_contract.json` (Slice 5c, run `run_20260523_000007_sw_llmwiki_slice5c`).
 - `agreed_contract.json` (Slice 5b, run `run_20260523_000006_sw_llmwiki_slice5b`).
 - `agreed_contract.json` (Slice 5a, run `run_20260523_000005_sw_llmwiki_slice5a`).

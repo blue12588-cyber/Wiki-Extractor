@@ -3,6 +3,8 @@
 //! Registers the command surface:
 //!   - `auth_file_present`        from external_dep_paths.rs
 //!   - `codex_detect`             from codex_detect.rs (Slice 5c, read-only)
+//!   - `codex_login_start`        from codex_login.rs (Slice 6, spawn-only;
+//!                                app writes ZERO to auth.json — codex does)
 //!   - `oauth_child_status`       from oauth_child.rs
 //!   - `oauth_proxy_start/stop`   from oauth_child.rs (Slice 5c, Round-2 spawn)
 //!   - `dev_fallback_status`      from dev_fallback.rs
@@ -27,6 +29,7 @@
 
 mod external_dep_paths;
 mod codex_detect;
+mod codex_login;
 mod oauth_child;
 mod dev_fallback;
 mod upload_cmd;
@@ -51,6 +54,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             external_dep_paths::auth_file_present,
             codex_detect::codex_detect,
+            codex_login::codex_login_start,
             oauth_child::oauth_child_status,
             oauth_child::oauth_proxy_start,
             oauth_child::oauth_proxy_stop,

@@ -16,6 +16,7 @@
   import MainTab from '$lib/components/views/MainTab.svelte';
   import WikiTab from '$lib/components/views/WikiTab.svelte';
   import LoginTab from '$lib/components/views/LoginTab.svelte';
+  import UsageTab from '$lib/components/views/UsageTab.svelte';
   import FeedbackTab from '$lib/components/views/FeedbackTab.svelte';
 
   const activeTab = getContext<Writable<TabId>>('activeTab');
@@ -27,6 +28,8 @@
   <WikiTab />
 {:else if $activeTab === 'login'}
   <LoginTab />
+{:else if $activeTab === 'usage'}
+  <UsageTab />
 {:else if $activeTab === 'feedback'}
   <FeedbackTab />
 {/if}

@@ -22,7 +22,9 @@
 import {
   detectCodex,
   providerAvailabilities,
+  startCodexLogin,
   type CodexDetectSnapshot,
+  type CodexLoginOutcome,
   type ProviderAvailability,
   type ProviderId,
 } from './provider';
@@ -41,6 +43,22 @@ interface ModeState {
   selected: ProviderId;
   /** True while a detect refresh is in flight. */
   refreshing: boolean;
+  /** True while a `codex login` spawn is in flight (Slice 6 — button busy). */
+  loggingIn: boolean;
+  /**
+   * Korean status line from the last login button press (Slice 6). null when no
+   * login has been attempted this session. Shown beneath the login button so the
+   * user always gets a friendly, color-independent message (AC-CODEX-LOGIN-BTN /
+   * AC-KOREAN-UI). Never holds any token/secret — only guidance text.
+   */
+  loginMessage: string | null;
+  /**
+   * A device-code verification URL/line, when codex emits one (`--device-auth`
+   * or a build that prints a code). Shown so the user can complete the flow in
+   * the browser. null otherwise. Non-secret (the auth token is written by codex
+   * into auth.json, never surfaced here).
+   */
+  loginVerification: string | null;
 }
 
 export const modeStore = $state<ModeState>({
@@ -48,6 +66,9 @@ export const modeStore = $state<ModeState>({
   availabilities: providerAvailabilities(INITIAL_DETECT),
   selected: 'offline',
   refreshing: false,
+  loggingIn: false,
+  loginMessage: null,
+  loginVerification: null,
 });
 
 /** Re-run codex detection (read-only) and refresh the availability list. */
@@ -55,13 +76,69 @@ export async function refreshDetect(): Promise<void> {
   modeStore.refreshing = true;
   try {
     const detect = await detectCodex();
-    modeStore.detect = detect;
-    modeStore.availabilities = providerAvailabilities(detect);
+    applyDetect(detect);
     // If the user had auto selected but it is no longer available, do NOT force
     // them off it in the store (so the toggle still shows their intent), but
     // `effectiveProviderId()` will collapse to offline at use time.
   } finally {
     modeStore.refreshing = false;
+  }
+}
+
+/** Apply a detect snapshot to the store (shared by refresh + login). */
+function applyDetect(detect: CodexDetectSnapshot): void {
+  modeStore.detect = detect;
+  modeStore.availabilities = providerAvailabilities(detect);
+}
+
+/**
+ * Press the ChatGPT-login button (Slice 6 — AC-CODEX-LOGIN-BTN +
+ * AC-LOGIN-STATE-REFRESH). Spawns `codex login` (browser OAuth via the Rust
+ * command), then refreshes the auth state from the outcome:
+ *
+ *   - `authed`     → apply the carried detect snapshot (now available) so the
+ *                    login tab flips unauthed→authed and the auto-mode radio
+ *                    becomes selectable. We do NOT auto-select auto mode (the
+ *                    user opts in) — only the AVAILABILITY changes.
+ *   - `not_authed` → apply the carried snapshot (still unavailable) + message.
+ *   - `pending`    → keep current state; show the device-code/URL + a "다시 검출"
+ *                    hint. A read-only refresh is run so a meanwhile-completed
+ *                    flow is still picked up.
+ *   - `cli_missing`/`failed` → message only; copy-paste stays the default.
+ *
+ * The app NEVER writes the auth file — codex does. This action only spawns +
+ * re-reads. Never throws; always leaves a Korean `loginMessage`.
+ */
+export async function loginWithChatGPT(deviceAuth = false): Promise<CodexLoginOutcome> {
+  modeStore.loggingIn = true;
+  modeStore.loginVerification = null;
+  try {
+    const outcome = await startCodexLogin(deviceAuth);
+    switch (outcome.state) {
+      case 'authed':
+        applyDetect(outcome.detect);
+        modeStore.loginMessage =
+          'ChatGPT 로그인이 확인되었습니다. 이제 [추출 모드]에서 자동 LLM 모드를 켤 수 있습니다. (원하지 않으면 복붙 모드를 그대로 쓰셔도 됩니다.)';
+        break;
+      case 'not_authed':
+        applyDetect(outcome.detect);
+        modeStore.loginMessage = outcome.message;
+        break;
+      case 'pending':
+        modeStore.loginMessage = outcome.message;
+        modeStore.loginVerification = outcome.verification;
+        // A meanwhile-completed flow may already have written auth.json; pick it
+        // up with a read-only re-detect (does not block on the codex child).
+        await refreshDetect();
+        break;
+      case 'cli_missing':
+      case 'failed':
+        modeStore.loginMessage = outcome.message;
+        break;
+    }
+    return outcome;
+  } finally {
+    modeStore.loggingIn = false;
   }
 }
 

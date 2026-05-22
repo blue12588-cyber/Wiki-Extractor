@@ -21,6 +21,7 @@
     modeStore,
     refreshDetect,
     selectProvider,
+    loginWithChatGPT,
   } from '$lib/llm/modeStore.svelte';
   import type { ProviderId } from '$lib/llm/provider';
 
@@ -31,6 +32,12 @@
 
   function pick(id: ProviderId) {
     selectProvider(id);
+  }
+
+  // [ChatGPT로 로그인] — 앱이 codex login을 spawn(브라우저 OAuth). 앱은 auth.json을
+  // 직접 쓰지 않는다(codex가 ~/.codex에 기록). 끝나면 read-only 재검출로 상태 갱신.
+  function login() {
+    void loginWithChatGPT(false);
   }
 
   // 검출 요약 라벨(한글). 색상에만 의존하지 않도록 텍스트로 상태를 말한다.
@@ -54,6 +61,41 @@
       {modeStore.refreshing ? '검출 중…' : '다시 검출'}
     </button>
   </div>
+
+  <div class="login-row">
+    <button
+      type="button"
+      class="login-btn"
+      onclick={login}
+      disabled={modeStore.loggingIn}
+      aria-busy={modeStore.loggingIn}
+    >
+      <span class="login-mark" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="15" height="15">
+          <circle cx="6" cy="6" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6" />
+          <path d="M8.2 8.2 L13 13 M11 11 L13 9.5 M12 12 L13.5 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+      </span>
+      <span>{modeStore.loggingIn ? '로그인 진행 중… (브라우저를 확인하세요)' : 'ChatGPT로 로그인'}</span>
+    </button>
+    <span class="login-hint">
+      버튼을 누르면 앱이 codex 로그인을 실행해 브라우저에서 ChatGPT 계정으로
+      로그인합니다(아이디·비밀번호는 앱에 입력하지 않습니다). 로그인은 codex가
+      처리하며, 앱은 인증 파일을 직접 만들거나 고치지 않습니다. 로그인하지 않아도
+      복붙 모드로 모든 기능을 그대로 쓸 수 있습니다.
+    </span>
+  </div>
+
+  {#if modeStore.loginMessage}
+    <p class="login-status" role="status">{modeStore.loginMessage}</p>
+  {/if}
+
+  {#if modeStore.loginVerification}
+    <p class="login-verify" role="note">
+      브라우저에서 아래 주소/코드로 로그인을 마쳐 주세요:
+      <code class="verify-code">{modeStore.loginVerification}</code>
+    </p>
+  {/if}
 
   <fieldset class="modes">
     <legend class="modes-legend">추출 모드</legend>
@@ -124,6 +166,63 @@
   .detect-badge[data-state='ok'] { color: var(--success-moss); border-color: var(--success-moss); }
   .detect-badge[data-state='na'] { color: var(--text-secondary); border-style: dashed; }
   .detect-sub { font-size: 0.75rem; color: var(--text-secondary); }
+
+  /* [ChatGPT로 로그인] 버튼 블록 (Slice 6). 토큰만 사용. */
+  .login-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+  .login-btn {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-lg);
+    border: 1px solid var(--accent-oxblood);
+    border-radius: var(--radius-soft);
+    background: var(--accent-oxblood);
+    color: var(--surface-base);
+    font-family: var(--heading-family);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity var(--motion-fast) var(--ease-deliberate);
+  }
+  .login-btn:hover { opacity: 0.9; }
+  .login-btn:disabled { opacity: 0.6; cursor: progress; }
+  .login-mark {
+    display: inline-flex;
+    align-items: center;
+    line-height: 0;
+    color: currentColor;
+  }
+  .login-hint {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+  }
+  .login-status {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+    padding: var(--space-sm) var(--space-md);
+    border-left: 3px solid var(--success-moss);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-tight);
+  }
+  .login-verify {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .verify-code {
+    display: inline-block;
+    margin-top: var(--space-xs);
+    word-break: break-all;
+  }
 
   .modes {
     border: none;
