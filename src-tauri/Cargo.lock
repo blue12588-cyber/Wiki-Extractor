@@ -83,6 +83,7 @@ dependencies = [
  "dirs 5.0.1",
  "log",
  "once_cell",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

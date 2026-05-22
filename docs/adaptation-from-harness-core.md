@@ -125,8 +125,52 @@ These are listed so a future re-sync explicitly considers whether each becomes i
 - **No silent verbatim copies**: a rationale entry in §Per-file rationale is required before merging any file that was copied or substantially derived from harness-core. Code review checklist enforces this.
 - **Schema-diff discipline**: any schema change from upstream must list every field touched. A diff section with empty body is invalid and fails the `T1-adaptation-log-structure-check` Tier-1 scenario.
 
+## Slice 3 adaptation (Round-3)
+
+**Status**: SUBSTANTIVE (Slice 3). Slice 3 re-syncs from a newer harness-core HEAD
+and re-introduces the academic-domain semantics that Slice 2 deliberately
+generalized away (Catholic terminology, the 7-type extraction units, the
+candidate-evaluator, the wiki-committer local_markdown target).
+
+### Upstream pin (Slice 3)
+
+- **upstream repository**: `harness-core` (read-only; `\\wsl.localhost\ubuntu-24.04\home\user\harness-core`).
+- **upstream HEAD pinned during Slice 3 work**: `03538cfe2cdafd809ba92cbf2e9f4035245f4d21`.
+- **upstream branch**: `master`.
+- **write policy**: zero writes outside `D:\AI Project\llmwiki\**` and `runs/<run_id>/`. AC-9 pre/post HEAD equality holds.
+
+### Adapted source paths (Slice 3 enumeration)
+
+- `harness-core/workflows/academic-source-ingest.md` §"Step 2. Chunk" → `src/lib/chunk/chunker.ts`. The semantic-boundary chunking rules (heading / paragraph cluster / oversize internal split) are ported into a deterministic TS module that writes `data/sources/<id>/chunks.jsonl` (AC-CHUNK). The upstream's Notion authority-order, HITL stops, and commit-plan lifecycle are NOT ported (single-user desktop, no canonical-promotion tier in this slice).
+- `harness-core/domains/academic/source-extractor.md` → `src-tauri/src/llm_cmd.rs::EXTRACT_SYSTEM_PROMPT`. The role prompt (7 extraction units, "reusable knowledge candidate", evidence-required, candidate quality test) is ported into an LLM system prompt (Slice 2's deterministic TS module is RETAINED as the offline fallback). `biblical_text` stays renamed to `religious_text` per the Slice-2 generalization, kept for schema compatibility.
+- `harness-core/domains/academic/candidate-evaluator.md` → `src-tauri/src/llm_cmd.rs::CLASSIFY_SYSTEM_PROMPT`. The evaluator's review criteria (standalone reuse value, evidence quality, duplication risk, action recommendation) are ported and re-aimed at the user-supplied outline-node classification (AC-CLASSIFY-MAP). Slice 2 had marked this file "NOT adapted"; Slice 3 supersedes that entry.
+- `harness-core/domains/academic/writing-guidance.md` §"Catholic Terminology" → `src-tauri/src/llm_cmd.rs::TRANSLATE_SYSTEM_PROMPT`. The Catholic-standard-terminology default and the Protestant-term prohibition are ported verbatim in intent (의화 not 칭의, 은총 not 은혜, 판관기/마르코 복음/마태오 복음 Catholic book names). The "preserve source titles / metadata / direct quotations" exception is honored by the ORIGINAL-TEXT-PRESERVATION invariant: translation is a SEPARATE field (`WikiClaim.translated_text`); `WikiClaim.original_text` is never mutated (AC-TRANSLATE + AC-ANNOTATION). Slice 2 had explicitly DROPPED the Catholic-terminology default ("llmwiki Slice 2 is domain-neutral"); Slice 3 re-introduces it for the academic wiki path.
+- `harness-core/domains/academic/wiki-committer.md` + `harness-core/knowledge/academic/wiki/**` layout → `src-tauri/src/wiki_cmd.rs` + `src/lib/wiki/*.ts`. The local_markdown target store (`<entry>.md` + `index.json` + `links.json`) is ported as the persistent, EDITABLE wiki store under `data/wiki/` (AC-WIKI-PERSIST + AC-EDIT-PERSIST). The HITL approval gate, staging tier, commit_plan/commit_result lifecycle, and Notion target are NOT ported — the desktop single-user app persists directly from candidate → editable entry (entries enter as `draft`). Slice 2 had marked wiki-committer "NOT adapted"; Slice 3 supersedes that for the local_markdown structure only.
+
+### Original-text preservation (HARD invariant)
+
+`WikiClaim.original_text` is a verbatim slice of the source `evidence_text`; it is never altered by translation. The Catholic-terminology Korean translation lives only in `WikiClaim.translated_text`. The annotation UI (`ClaimAnnotation.svelte`) shows translated-original ABOVE and untranslated-original BELOW (AC-ANNOTATION). This satisfies the upstream "preserve direct quotations / original-language labels exactly" exception while still defaulting prose to Catholic terminology.
+
+### LLM auth + model abstraction (AC-LLM-EXTRACT)
+
+- Model id (`gpt-5.4`, a user-specified value) + endpoint template live in `src-tauri/llm.config.json` (config single source). The abstraction seam is `LlmConfig` + `resolve_base_url()`; swapping models is a config edit.
+- Auth = OAuth subscription flow (OpenClaude/Hermes pattern) via the existing `oauth_child` loopback endpoint (`http://127.0.0.1:<port>/v1`). The child injects the subscription bearer token, so `llm_cmd.rs` never reads the auth file (keeps the AC-7-relaxed boundary intact — `external_dep_paths.rs` remains the SOLE OS-user-dir module). Logic is WIRED; real call operability is NOT guaranteed (contract: "막히면 Codex 협의").
+- Graceful degradation: every LLM command returns `Result<.., LlmError{degraded}>`. On auth/call failure the renderer keeps view/edit/save fully working (offline path is FS-only); only extraction/classification/translation are blocked with a Korean message. The app never crashes.
+
+### Korean UI scope note
+
+All Slice-3 surfaces (upload, outline, candidates, wiki editor, annotations, notices) are Korean (AC-KOREAN-UI). The Slice-2 `DisclosureBanner.svelte` legal/security phrases are LEFT in English: they are a verbatim-pinned legal disclosure tied to the upstream openai-oauth README and are asserted by the `T1-banner-mount-and-disclosure-text` regression scenario. Korean-izing them would (a) break that regression and (b) drift from the legally-significant source wording. Recorded here as a scoped exception; a future slice may add a Korean translation row WITHOUT removing the pinned English phrases.
+
+### What was NOT adapted (Slice 3)
+
+- HITL approval gate / `HITL_KNOWLEDGE_COMMIT` stop — the desktop app has no orchestrator-mediated approval loop; entries persist as `draft` directly and the user edits/saves freely.
+- `knowledge/academic/staging/**` staging tier, `commit_plan.json` / `commit_result.json`, `promotion_checklist.md` — no canonical-promotion lifecycle in this slice.
+- Notion target store — out of scope (contract exclude).
+- `source_quality_check.json` preflight / OCR anchors — Slice 3 inputs are the same plaintext/MD/PDF as Slice 2; OCR/EPUB/HWPX remain excluded.
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 3, run `run_20260520_000003_sw_llmwiki_slice3`).
 - `agreed_contract.json` (Slice 2, run `run_20260521_093931_p5_sw_llmwiki_slice2`).
 - `contract_proposal_v2.md` (Round-2 proposal narrative; same run).
 - `r2_step_log.txt` (Round-2 implementation step log; same run).

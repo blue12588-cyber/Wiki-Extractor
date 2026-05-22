@@ -30,3 +30,12 @@ once_cell = "1"
 thiserror = "1"
 sha2 = "0.10"
 base64 = "0.22"
+# Slice 3 AC-LLM-EXTRACT: outbound calls are restricted to the OpenAI OAuth
+# subscription / LLM loopback endpoint only. reqwest is already resolved as a
+# transitive tauri dependency (see Cargo.lock); declaring it directly with the
+# `json` feature reuses that resolution. Runtime network is gated by config +
+# graceful degradation — logic wiring only, real call not guaranteed.
+# Loopback endpoint is plain HTTP (http://127.0.0.1:<port>/v1) so no TLS
+# backend is required; `json` is the only feature we add. This matches the
+# already-locked reqwest 0.13.3 resolution and avoids lockfile churn.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }

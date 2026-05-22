@@ -1,0 +1,15 @@
+{
+  "$comment": "AC-LLM-EXTRACT single source of truth for the model id and endpoint shape. The model id is a USER-SPECIFIED value (agreed_contract allowed_assumptions: GPT-5.4 model id is config; endpoint/model real existence is NOT a runtime verification target — logic wiring only). Swap `model` here to change models without touching code (abstraction-by-config). `endpoint_template` uses {base} which is filled at runtime from the openai-oauth child's ready URL (http://127.0.0.1:<port>/v1).",
+  "model": "gpt-5.4",
+  "endpoint_template": "{base}/chat/completions",
+  "auth": "oauth_subscription",
+  "request": {
+    "temperature": 0,
+    "max_output_tokens": 4096,
+    "timeout_ms": 60000
+  },
+  "degradation": {
+    "on_no_auth": "View, edit, and save remain fully available offline. Extraction, classification, and translation are disabled until an OAuth subscription session is reachable.",
+    "on_call_failure": "The error is surfaced verbatim; the app does not crash and the existing deterministic candidates / original text remain visible and editable."
+  }
+}
