@@ -47,6 +47,12 @@ function createPipeline() {
   let busy = $state(false);
   /** Set true once onMount in the layout has loaded persisted entries + cfg. */
   let bootstrapped = $state(false);
+  /**
+   * Slice 5b — the candidate currently driving the ChatGPT copy-paste bridge,
+   * by local_candidate_id. null = no bridge panel open. The app never calls the
+   * LLM; this only tracks which candidate's prompt is shown for copy-paste.
+   */
+  let bridgeCandidateId = $state<string | null>(null);
 
   return {
     get bundle() { return bundle; },
@@ -73,6 +79,8 @@ function createPipeline() {
     set busy(v) { busy = v; },
     get bootstrapped() { return bootstrapped; },
     set bootstrapped(v) { bootstrapped = v; },
+    get bridgeCandidateId() { return bridgeCandidateId; },
+    set bridgeCandidateId(v) { bridgeCandidateId = v; },
   };
 }
 

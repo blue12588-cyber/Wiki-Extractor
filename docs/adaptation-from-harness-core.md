@@ -215,8 +215,55 @@ engine cannot reach the network or the model by construction.
 - `harness-core/schemas/candidate.schema.json` `evaluation` object / `duplication_risk` numeric fields — Slice 5a keeps scores internal and does not persist a candidate-queue file; the card decisions are in-memory for 5a.
 - The ChatGPT copy-paste prompt body (Slice 5b) — the card's "ChatGPT 프롬프트 복사" button is a DISABLED placeholder in 5a; its prompt format is a deferred question.
 
+## Slice 5b adaptation (ChatGPT copy-paste bridge)
+
+**Status**: SUBSTANTIVE (Slice 5b). Slice 5b adds the ChatGPT copy-paste bridge
+on top of the Slice-5a offline candidate engine: the app builds a prompt the
+user copies into chatgpt.com, then validates the JSON ChatGPT returns and
+imports passing candidates into the wiki. The app NEVER calls the LLM itself
+(that is Slice 5c codex/openai-oauth, out of scope here); 'ChatGPT 열기' is OS
+browser delegation only. No auth, no API key.
+
+### Upstream pin (Slice 5b)
+
+- **upstream repository**: `harness-core` (read-only; `\\wsl.localhost\ubuntu-24.04\home\user\harness-core`).
+- **upstream HEAD pinned during Slice 5b work**: `fb9c33392410b764d70657da4415a9ffa79b4538`.
+- **upstream branch**: `master`.
+- **write policy**: zero writes outside `D:\AI Project\llmwiki\**` and `runs/<run_id>/`. AC-9 pre/post HEAD equality holds (Slice 5b makes ZERO harness-core writes; the prompt schema + validation rules are re-expressed in the target tree). A parallel SW gate track may advance the harness-core HEAD during this run; that is external and is NOT a Slice-5b write — the invariant is that THIS run touches nothing under the harness-core working tree.
+
+### Adapted source paths (Slice 5b enumeration)
+
+- `harness-core/domains/academic/source-extractor.md` (role-prompt shape: "use only the supplied chunks", "do not guess", "evidence required by chunk_id") → `src/lib/bridge/promptBuilder.ts` `ROLE_BLOCK`. The upstream LLM role instructions are **re-expressed as the user-copyable prompt text** the bridge generates. The Catholic-terminology default (from `writing-guidance.md`, already adapted in Slice 3) is **carried into the prompt** as the explicit "한글 번역은 가톨릭 용어 우선(개신교 번역 금지)" line. The app does not run the prompt — the USER pastes it into chatgpt.com.
+- `harness-core/domains/academic/candidate-evaluator.md` §"evidence quality" / "evidence required" → `src/lib/bridge/responseValidator.ts`. The upstream's "every candidate must cite real evidence" criterion is **mechanized as the anti-forgery binding gate**: every `evidence[].chunk_id` in the pasted reply must exist in the REAL uploaded `chunks.jsonl`; any unknown chunk_id rejects the candidate. This is stricter than the upstream prose check (it is a hard, deterministic gate) because a pasted LLM reply is untrusted input.
+- `harness-core/knowledge/academic/wiki/*.md` structure (Claim / Evidence / Synthesis / Boundaries / Links) + the Slice-3 `WikiClaim` original-text-preservation invariant → `src/lib/bridge/wikiImport.ts`. A validated ChatGPT candidate becomes a draft `WikiEntry`: `WikiClaim.original_text` is the **verbatim source chunk text** (resolved by chunk_id from the real uploaded chunks — NOT the ChatGPT-authored `quote`), the Catholic-terminology `summary_ko` goes into the separate `translated_text` field, and `evidence_refs` bind to the real chunk_id. This reuses the Slice-3 `wikiStore.saveEntryAndIndex` + `ClaimAnnotation` UI unchanged.
+
+### Anti-forgery evidence binding (HARD gate)
+
+A pasted ChatGPT reply can hallucinate fake chunk_ids. `responseValidator.validateResponse(parsed, knownChunkIds)` cross-checks every `evidence[].chunk_id` against the set of chunk_ids actually present in the uploaded source's `chunks.jsonl`. A candidate with ANY unknown chunk_id is marked NOT importable with a Korean 위조-차단 message; only fully-bound candidates can enter the wiki. The `T1-slice5b evidence-bind` scenario asserts a forged chunk_id is rejected and a real one is accepted.
+
+### App-never-calls-LLM (5b scope boundary)
+
+The four bridge modules (`promptBuilder`, `responseParser`, `responseValidator`, `wikiImport`) are PURE functions of their inputs — no `fetch`, no `invoke`, no LLM client, no URL. The `T1-slice5b offline-no-network` scenario asserts that statically. The single network-adjacent action is `window.open('https://chatgpt.com/')` in `BridgePanel.svelte` (AC-COPY 'ChatGPT 열기'), which delegates a user-initiated navigation to the OS default browser — the app issues no HTTP request of its own. The clipboard copy uses the OS clipboard (`navigator.clipboard`) only. Introducing a direct ChatGPT/OpenAI API call would be a Slice-5b scope violation (it is the deferred Slice 5c).
+
+### What was NOT adapted (Slice 5b)
+
+- `harness-core/domains/academic/wiki-committer.md` HITL approval gate / Notion target — the imported entry persists directly as `draft`; the user approves/holds/discards per the existing card flow.
+- Auto LLM call / codex / openai-oauth hybrid — deferred to Slice 5c (contract `deferred_questions`).
+- Custom GPT template provisioning — the bridge supplies the prompt text only; creating a Custom GPT is a manual user action (contract exclude).
+
+## Slice 5b repair (defense-in-depth hardening; non-blocking)
+
+**Status**: REPAIR on top of Slice 5b (run `run_20260523_000006_sw_llmwiki_slice5b`, verdict pass / blocking 0). Three Evaluator-flagged non-blocking robustness notes were hardened. No AC behaviour changed for the passing single-source flow; the anti-forgery gate and original-text preservation are unchanged-or-stronger. Write scope: `D:\AI Project\llmwiki\**` only; harness-core read-only.
+
+1. **Source-scoped evidence binding** — `actions.ts` `bridgeKnownChunkIds()` and the original-text restoration chunk pool in `importBridgeCandidate()` are now scoped to the OPEN candidate's own `source_id` (via `chunksForSource`). Evidence can only bind within the source the candidate came from; in a multi-source session a real chunk_id from a *different* loaded source is treated as unknown (rejected), so `entry.source_ids` and the evidence refs never disagree. Single-source flow is unchanged.
+2. **Rejected-evidence quarantine** — `responseValidator.ts` now keeps bound evidence on `ValidatedCandidate.evidence` and routes forged/empty refs (with their model-authored quote) into a SEPARATE `rejectedEvidence: RejectedEvidence[]` carrying only `claimed_chunk_id` + Korean `reason`. A forged ref can never be read off `evidence` downstream even if a future caller forgets the `importable` guard. `BridgePanel.svelte` renders bound refs from `evidence` and rejected refs (red) from `rejectedEvidence`.
+3. **Fallback hard-refusal** — `wikiImport.ts` `claimsFor` no longer silently substitutes the ChatGPT quote into `original_text` when a chunk is unresolvable. It now THROWS (`원문 복원 실패…`), so the model-authored quote can never become the preserved-original on any code path.
+
+New smoke scenarios (in `fixtures/t1-slice5b-smoke.mjs`): `source-scope`, `rejected-evidence`, `fallback-refusal`; `evidence-bind` was extended to assert the forged ref is quarantined off `evidence`. All 10 slice5b scenarios + slice3/4/5a regression + static-scan green; svelte-check 0 errors (1 pre-existing node-types warning); tauri build exit 0.
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 5b, run `run_20260523_000006_sw_llmwiki_slice5b`).
 - `agreed_contract.json` (Slice 5a, run `run_20260523_000005_sw_llmwiki_slice5a`).
 - `agreed_contract.json` (Slice 3, run `run_20260520_000003_sw_llmwiki_slice3`).
 - `agreed_contract.json` (Slice 2, run `run_20260521_093931_p5_sw_llmwiki_slice2`).

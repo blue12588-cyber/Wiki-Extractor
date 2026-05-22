@@ -14,6 +14,7 @@
   import OutlineInput from '$lib/components/OutlineInput.svelte';
   import CandidateList from '$lib/components/CandidateList.svelte';
   import CandidateCardList from '$lib/components/CandidateCardList.svelte';
+  import BridgePanel from '$lib/components/BridgePanel.svelte';
   import { pipeline } from '$lib/pipeline/store.svelte';
   import {
     onFileSelected,
@@ -21,7 +22,16 @@
     buildWiki,
     runRuleEngine,
     onCandidateDecision,
+    openBridge,
+    closeBridge,
+    importBridgeCandidate,
+    bridgePromptInput,
+    bridgeKnownChunkIds,
   } from '$lib/pipeline/actions';
+
+  // Slice 5b — derive the open bridge panel's inputs from the store.
+  let bridgeInput = $derived(pipeline.bridgeCandidateId ? bridgePromptInput() : null);
+  let knownChunkIds = $derived(bridgeKnownChunkIds());
 
   let upload_zone: ReturnType<typeof UploadZone> | null = null;
 
@@ -96,7 +106,17 @@
     cards={pipeline.candidateCards}
     busy={pipeline.scoring}
     ondecision={onCandidateDecision}
+    oncopyprompt={openBridge}
   />
+
+  {#if bridgeInput}
+    <BridgePanel
+      input={bridgeInput}
+      {knownChunkIds}
+      onimport={importBridgeCandidate}
+      onclose={closeBridge}
+    />
+  {/if}
 </section>
 
 <style>

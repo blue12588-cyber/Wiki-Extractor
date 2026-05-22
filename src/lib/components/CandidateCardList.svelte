@@ -20,9 +20,11 @@
     cards: CandidateCardModel[];
     busy?: boolean;
     ondecision?: (candidateId: string, next: CandidateDecision) => void;
+    /** Slice 5b — open the ChatGPT copy-paste bridge for one candidate. */
+    oncopyprompt?: (candidateId: string) => void;
   };
 
-  let { cards, busy = false, ondecision }: Props = $props();
+  let { cards, busy = false, ondecision, oncopyprompt }: Props = $props();
 
   const ACTION_ORDER: RecommendedAction[] = ['create_new', 'update_existing', 'link_only', 'ignore'];
 
@@ -67,6 +69,7 @@
           scored={model.scored}
           decision={model.decision}
           ondecision={(next) => ondecision?.(model.scored.candidate.local_candidate_id, next)}
+          oncopyprompt={() => oncopyprompt?.(model.scored.candidate.local_candidate_id)}
         />
       {/each}
     </ol>

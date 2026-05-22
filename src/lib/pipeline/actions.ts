@@ -33,6 +33,11 @@ import {
 import type { WikiEntry } from '$lib/wiki/wikiTypes';
 import { llmExtract, llmClassify, llmTranslate } from '$lib/llm/llmClient';
 import { runCandidateEngine, type CandidateDecision } from '$lib/candidate/candidateEngine';
+import { outlineKeywords } from '$lib/candidate/candidateEngine';
+import type { Chunk } from '$lib/chunk/chunker';
+import type { PromptInput } from '$lib/bridge/promptBuilder';
+import type { ValidatedCandidate } from '$lib/bridge/responseValidator';
+import { buildEntryFromValidated } from '$lib/bridge/wikiImport';
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -234,6 +239,122 @@ export async function buildWiki() {
 export async function onSaveEntry(entry: WikiEntry) {
   await saveEntryAndIndex(entry);
   pipeline.entries = await loadAllEntries();
+}
+
+/* ---------------- Slice 5b — ChatGPT copy-paste bridge ---------------- */
+
+/**
+ * All loaded chunks that belong to one source, in document order. This is the
+ * binding/preservation pool for a candidate: evidence may bind ONLY within the
+ * source the candidate came from, so in a multi-source session a candidate can
+ * never match a real chunk_id from a different source (provenance integrity).
+ * Deterministic. NO LLM, NO network.
+ */
+function chunksForSource(source_id: string): Chunk[] {
+  return [...pipeline.chunks]
+    .filter((ch) => ch.source_id === source_id)
+    .sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Chunks that back a candidate: the chunk that contains the candidate span,
+ * plus its immediate document neighbours for context. Scoped to the candidate's
+ * OWN source so the prompt never carries another source's text. Deterministic
+ * (sorted by order). NO LLM, NO network.
+ */
+function chunksForCandidate(candidateLocalId: string): Chunk[] {
+  const card = pipeline.candidateCards.find(
+    (c) => c.scored.candidate.local_candidate_id === candidateLocalId,
+  );
+  if (!card) return [];
+  const span = card.scored.candidate.span;
+  const sourceChunks = chunksForSource(card.scored.candidate.source_id);
+  const hitIdx = sourceChunks.findIndex(
+    (ch) => span.start >= ch.location.char_start && span.start < ch.location.char_end,
+  );
+  if (hitIdx < 0) {
+    // No char-span hit (e.g. LLM-origin candidate): fall back to all chunks for
+    // the same source so the user still has real chunk_ids to bind against.
+    return sourceChunks;
+  }
+  const lo = Math.max(0, hitIdx - 1);
+  const hi = Math.min(sourceChunks.length - 1, hitIdx + 1);
+  return sourceChunks.slice(lo, hi + 1);
+}
+
+/** Build the PromptInput for the bridge's currently-open candidate, or null. */
+export function bridgePromptInput(): PromptInput | null {
+  const id = pipeline.bridgeCandidateId;
+  if (!id) return null;
+  const card = pipeline.candidateCards.find(
+    (c) => c.scored.candidate.local_candidate_id === id,
+  );
+  if (!card) return null;
+  return {
+    candidate: card.scored,
+    chunks: chunksForCandidate(id),
+    schema: outlineKeywords(pipeline.outline, []),
+  };
+}
+
+/**
+ * The real uploaded chunk_ids the bridge validates evidence against — scoped to
+ * the OPEN bridge candidate's own source. Evidence can therefore only bind
+ * within the source the candidate came from; a real chunk_id from a different
+ * loaded source is treated as unknown (rejected), preserving provenance.
+ */
+export function bridgeKnownChunkIds(): string[] {
+  const id = pipeline.bridgeCandidateId;
+  if (!id) return [];
+  const card = pipeline.candidateCards.find(
+    (c) => c.scored.candidate.local_candidate_id === id,
+  );
+  if (!card) return [];
+  return chunksForSource(card.scored.candidate.source_id).map((c) => c.chunk_id);
+}
+
+/** AC-COPY: open the copy-paste bridge for one candidate (prompt copy origin). */
+export function openBridge(candidateId: string) {
+  pipeline.bridgeCandidateId = candidateId;
+}
+
+export function closeBridge() {
+  pipeline.bridgeCandidateId = null;
+}
+
+/**
+ * AC-IMPORT + AC-APPROVE + AC-EVIDENCE-BIND: import a VALIDATED ChatGPT
+ * candidate into the persistent wiki as a draft entry. The validated candidate
+ * already binds to real chunk_ids (forged ones were rejected upstream); we
+ * resolve original_text from the real chunk text (preservation) and save via
+ * the slice-3 wiki store.
+ */
+export async function importBridgeCandidate(validated: ValidatedCandidate) {
+  const id = pipeline.bridgeCandidateId;
+  if (!id) return;
+  const card = pipeline.candidateCards.find(
+    (c) => c.scored.candidate.local_candidate_id === id,
+  );
+  if (!card) return;
+  pipeline.busy = true;
+  try {
+    const source_id = card.scored.candidate.source_id;
+    // Original-text restoration pool is scoped to the candidate's OWN source, so
+    // a chunk_id can only resolve to verbatim text from the same source the
+    // candidate (and its entry.source_ids) claims.
+    const entry = buildEntryFromValidated(validated, {
+      source_id,
+      chunks: chunksForSource(source_id),
+      outlineNodeId: card.scored.target_entry_id ? null : null,
+    });
+    await saveEntryAndIndex(entry);
+    pipeline.entries = await loadAllEntries();
+    pipeline.notice = `ChatGPT 후보 「${validated.title}」을(를) 위키 초안으로 가져왔습니다(가톨릭 번역·원문 보존·근거 주석). 좌측 “위키” 탭에서 확인하세요.`;
+  } catch (err) {
+    pipeline.notice = `가져오기 중 오류: ${(err as Error).message}`;
+  } finally {
+    pipeline.busy = false;
+  }
 }
 
 export async function onTranslate(entry: WikiEntry, claimId: string, original: string) {

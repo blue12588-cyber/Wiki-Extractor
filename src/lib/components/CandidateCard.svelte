@@ -150,8 +150,7 @@
     <button
       type="button"
       class="btn copy"
-      title="ChatGPT 프롬프트 복사는 다음 단계(5b)에서 제공됩니다"
-      disabled
+      title="이 후보로 ChatGPT 프롬프트를 만들어 복사·왕복합니다(앱은 ChatGPT를 직접 호출하지 않습니다)"
       onclick={() => oncopyprompt?.()}
     >ChatGPT 프롬프트 복사</button>
   </div>
