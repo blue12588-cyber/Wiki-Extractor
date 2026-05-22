@@ -13,8 +13,15 @@
   import UploadZone from '$lib/components/UploadZone.svelte';
   import OutlineInput from '$lib/components/OutlineInput.svelte';
   import CandidateList from '$lib/components/CandidateList.svelte';
+  import CandidateCardList from '$lib/components/CandidateCardList.svelte';
   import { pipeline } from '$lib/pipeline/store.svelte';
-  import { onFileSelected, onOutlineParsed, buildWiki } from '$lib/pipeline/actions';
+  import {
+    onFileSelected,
+    onOutlineParsed,
+    buildWiki,
+    runRuleEngine,
+    onCandidateDecision,
+  } from '$lib/pipeline/actions';
 
   let upload_zone: ReturnType<typeof UploadZone> | null = null;
 
@@ -66,6 +73,30 @@
   {#if pipeline.notice}
     <p class="notice" role="status">{pipeline.notice}</p>
   {/if}
+</section>
+
+<section class="block">
+  <h2 class="section-title">규칙 기반 후보 카드</h2>
+  <p class="section-lede">
+    LLM 없이 오프라인 규칙으로 위키 후보를 평가합니다. 목차에 입력한 항목과 주제어를
+    근거로 “생성 · 보강 · 링크 · 무시”를 추천하고, 기존 위키와 중복되는 후보는 보강·링크로
+    안내합니다. 내부 점수는 보여 드리지 않으며, 추천 작업과 근거·경계만 카드로 표시합니다.
+  </p>
+  <div class="build-row">
+    <button
+      type="button"
+      class="btn primary"
+      onclick={runRuleEngine}
+      disabled={!pipeline.bundle || pipeline.scoring}
+    >
+      규칙 기반 후보 추출 (오프라인)
+    </button>
+  </div>
+  <CandidateCardList
+    cards={pipeline.candidateCards}
+    busy={pipeline.scoring}
+    ondecision={onCandidateDecision}
+  />
 </section>
 
 <style>

@@ -168,8 +168,56 @@ All Slice-3 surfaces (upload, outline, candidates, wiki editor, annotations, not
 - Notion target store — out of scope (contract exclude).
 - `source_quality_check.json` preflight / OCR anchors — Slice 3 inputs are the same plaintext/MD/PDF as Slice 2; OCR/EPUB/HWPX remain excluded.
 
+## Slice 5a adaptation (rule-based candidate engine + candidate cards)
+
+**Status**: SUBSTANTIVE (Slice 5a). Slice 5a adds an OFFLINE, deterministic
+rule-based candidate-scoring engine and a candidate-card UI on top of the
+Slice-4 app. NO LLM, NO network — the slice is the "일반인 MVP (오프라인)"
+half of the Codex-discussed hybrid architecture (the ChatGPT copy-paste bridge
+is Slice 5b; the codex/openai-oauth hybrid is Slice 5c, both out of scope here).
+
+### Upstream pin (Slice 5a)
+
+- **upstream repository**: `harness-core` (read-only; `\\wsl.localhost\ubuntu-24.04\home\user\harness-core`).
+- **upstream HEAD pinned during Slice 5a work**: `03538cfe2cdafd809ba92cbf2e9f4035245f4d21`.
+- **upstream branch**: `master`.
+- **write policy**: zero writes outside `D:\AI Project\llmwiki\**` and `runs/<run_id>/`. AC-9 pre/post HEAD equality holds (Slice 5a makes ZERO harness-core writes; all engine logic is re-implemented in the target tree).
+
+### Adapted source paths (Slice 5a enumeration)
+
+- `harness-core/domains/academic/source-extractor.md` §"Candidate Quality Test" + §"Extraction Units" → `src/lib/candidate/scoringEngine.ts` (criterion 4 재사용성 + the type-as-knowledge-unit signal) and `src/lib/candidate/claimVerbs.ts` (criterion 2 주장 강도). The upstream role prompt asks an LLM to JUDGE whether a chunk is a reusable knowledge unit / asserts a claim; Slice 5a **collapses that judgement into deterministic rules** — a bilingual assertion-verb lexicon (`claimVerbs.ts`) and a type/heading-proximity heuristic (`scoringEngine.ts::scoreReusability`). The "can this be reused without rereading the chunk?" test is realized as the reusability sub-score, not a prose check. NO model call.
+- `harness-core/domains/academic/candidate-evaluator.md` §"Review Criteria" + §"Action Guidance" → `src/lib/candidate/scoringEngine.ts` (criteria 3 근거 품질, 5 새로움/중복, 6 경계; the create_new/update_existing/link_only/ignore classifier) and `src/lib/candidate/demotePatterns.ts` (the `reject`-when-"not reusable"/"too source-specific" judgement, realized as a footnote/bibliography/toc/index/copyright regex layer). Slice 3 had ported this file's review criteria into an LLM `CLASSIFY_SYSTEM_PROMPT`; Slice 5a **re-ports the SAME criteria as a deterministic offline scorer** so the app produces classified candidates with no LLM. The upstream action labels are RE-AIMED for the user-facing card: `augment_existing` → `update_existing`, `defer`/`reject` collapse into `ignore` (and the structural-demotion override), `merge` is deferred (5a does not auto-merge — the user decides per card). This is a label re-aim, recorded here so a future re-sync reconciles the two action vocabularies.
+- `harness-core/knowledge/academic/index.json` record shape (`title` / `tags` / `original_terms` / `summary` / `related`) → `src/lib/candidate/keywordMatch.ts` + `scoringEngine.ts::scoreNovelty`. The upstream wiki uses these fields as its relatedness/identity surface; Slice 5a reuses the SAME surface for a deterministic token-overlap (Jaccard) similarity — NO embeddings, NO `embedding_ref`, NO LLM. The dedup/novelty check (AC-DEDUP) compares a candidate's `title + summary` against each existing `WikiEntry`'s `title + tags + summary`.
+- `harness-core/knowledge/academic/wiki/*.md` section layout (Claim / Evidence / Synthesis / Boundaries / Links) → `src/lib/components/CandidateCard.svelte`. The card's rows map onto that structure: 왜 후보인가 = Claim + Synthesis, 근거 = Evidence (chunk_id + page), 주의 = Boundaries. Links/related surface as the update/link "대상" row. The Slice 5a card does NOT render the wiki entry itself (that is the existing WikiTab); it renders the PROPOSAL to create/augment/link one.
+
+### Score-hidden UX (Codex guidance)
+
+The six per-criterion sub-scores and the internal total are computed in
+`scoringEngine.ts` but are **never bound in any Svelte component**. The card
+shows only the recommended action, the target (for update/link), the
+human-readable rationale ("왜 후보인가"), the evidence locator, and the
+boundary/demotion notes. The `T1-slice5a card-shape` scenario asserts the
+UI-facing fields exist; the absence of any `{total}`/`{sub}` binding in the
+component source is the structural guarantee that scores stay hidden.
+
+### Determinism + offline (AC-RULE-ENGINE / AC-OFFLINE)
+
+Every Slice-5a engine module (`scoringEngine`, `candidateEngine`, `claimVerbs`,
+`demotePatterns`, `keywordMatch`) is a PURE function of its inputs: no
+`Date.now()`, no randomness, no I/O. The `T1-slice5a offline-no-network`
+scenario statically asserts none of these modules reference `fetch`,
+`XMLHttpRequest`, `WebSocket`, `invoke(`, the LLM client, or any URL — the
+engine cannot reach the network or the model by construction.
+
+### What was NOT adapted (Slice 5a)
+
+- `harness-core/domains/academic/candidate-evaluator.md` §"merge" guidance — Slice 5a does not auto-merge candidates; the per-card 승인/보류/폐기 decision is the user's. Merge may return in a later slice.
+- `harness-core/schemas/candidate.schema.json` `evaluation` object / `duplication_risk` numeric fields — Slice 5a keeps scores internal and does not persist a candidate-queue file; the card decisions are in-memory for 5a.
+- The ChatGPT copy-paste prompt body (Slice 5b) — the card's "ChatGPT 프롬프트 복사" button is a DISABLED placeholder in 5a; its prompt format is a deferred question.
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 5a, run `run_20260523_000005_sw_llmwiki_slice5a`).
 - `agreed_contract.json` (Slice 3, run `run_20260520_000003_sw_llmwiki_slice3`).
 - `agreed_contract.json` (Slice 2, run `run_20260521_093931_p5_sw_llmwiki_slice2`).
 - `contract_proposal_v2.md` (Round-2 proposal narrative; same run).

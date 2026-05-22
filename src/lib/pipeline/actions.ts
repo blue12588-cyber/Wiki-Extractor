@@ -32,6 +32,7 @@ import {
 } from '$lib/wiki/wikiBuilder';
 import type { WikiEntry } from '$lib/wiki/wikiTypes';
 import { llmExtract, llmClassify, llmTranslate } from '$lib/llm/llmClient';
+import { runCandidateEngine, type CandidateDecision } from '$lib/candidate/candidateEngine';
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -61,6 +62,7 @@ async function runExtraction(file: File, full: Uint8Array, source_id: string, zo
   pipeline.bundle = null;
   pipeline.chunks = [];
   pipeline.chunkStatus = null;
+  pipeline.candidateCards = [];
   try {
     const bundle = await extractCandidates({ source_id, filename: file.name, buffer: full });
     pipeline.bundle = bundle;
@@ -116,6 +118,46 @@ export async function onFileSelected(file: File, zone: UploadZoneHandle | null) 
 
 export function onOutlineParsed(parsed: ParsedOutline) {
   pipeline.outline = parsed;
+}
+
+/**
+ * AC-RULE-ENGINE + AC-CLASSIFY + AC-DEDUP + AC-DEMOTE + AC-SCHEMA-INPUT.
+ *
+ * Run the OFFLINE, deterministic rule engine over the current bundle + chunks,
+ * using the pasted outline as the schema-fit keyword source and the loaded
+ * wiki entries for the dedup/novelty check. NO network, NO LLM. Same inputs →
+ * same cards (the engine is pure; we only attach an in-memory decision state).
+ */
+export function runRuleEngine() {
+  if (!pipeline.bundle) {
+    pipeline.notice = '먼저 원문을 업로드하세요.';
+    return;
+  }
+  pipeline.scoring = true;
+  try {
+    const cards = runCandidateEngine({
+      bundle: pipeline.bundle,
+      chunks: pipeline.chunks,
+      outline: pipeline.outline,
+      existingEntries: pipeline.entries,
+    });
+    pipeline.candidateCards = cards;
+    pipeline.notice =
+      cards.length > 0
+        ? `규칙 기반 후보 ${cards.length}개를 찾았습니다(오프라인, 점수 비표시).`
+        : '추출 가능한 위키 후보를 찾지 못했습니다.';
+  } catch (err) {
+    pipeline.notice = `후보 추출 중 오류: ${(err as Error).message}`;
+  } finally {
+    pipeline.scoring = false;
+  }
+}
+
+/** Record a per-card user decision (승인/보류/폐기). In-memory only for 5a. */
+export function onCandidateDecision(candidateId: string, next: CandidateDecision) {
+  pipeline.candidateCards = pipeline.candidateCards.map((c) =>
+    c.scored.candidate.local_candidate_id === candidateId ? { ...c, decision: next } : c,
+  );
 }
 
 function outlineTitleMap(): Record<string, string> {

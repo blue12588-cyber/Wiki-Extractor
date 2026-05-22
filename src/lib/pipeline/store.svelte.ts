@@ -18,6 +18,7 @@ import type { Chunk } from '$lib/chunk/chunker';
 import type { ParsedOutline } from '$lib/outline/outlineParser';
 import type { WikiEntry } from '$lib/wiki/wikiTypes';
 import type { LlmConfigSnapshot } from '$lib/llm/llmClient';
+import type { CandidateCardModel } from '$lib/candidate/candidateEngine';
 
 export type TabId = 'main' | 'wiki' | 'login' | 'feedback';
 
@@ -33,6 +34,9 @@ function createPipeline() {
 
   let outline = $state<ParsedOutline | null>(null);
   let entries = $state<WikiEntry[]>([]);
+  /** Slice 5a — rule-engine candidate cards (score hidden in UI). */
+  let candidateCards = $state<CandidateCardModel[]>([]);
+  let scoring = $state(false);
   let llmCfg = $state<LlmConfigSnapshot>({
     model: 'gpt-5.4',
     auth: 'oauth_subscription',
@@ -57,6 +61,10 @@ function createPipeline() {
     set outline(v) { outline = v; },
     get entries() { return entries; },
     set entries(v) { entries = v; },
+    get candidateCards() { return candidateCards; },
+    set candidateCards(v) { candidateCards = v; },
+    get scoring() { return scoring; },
+    set scoring(v) { scoring = v; },
     get llmCfg() { return llmCfg; },
     set llmCfg(v) { llmCfg = v; },
     get notice() { return notice; },
