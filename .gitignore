@@ -46,3 +46,7 @@ desktop.ini
 # Logs
 *.log
 logs/
+build-logs/
+
+# MSVC resolver record (host-specific; regenerated on each build)
+scripts/.last-msvc-resolution.txt
