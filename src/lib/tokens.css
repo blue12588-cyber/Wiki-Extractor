@@ -1,0 +1,72 @@
+/*
+ * llmwiki design tokens — CSS custom property layer.
+ *
+ * Authority: docs/design-tokens.md (mirror of
+ *   runs/run_20260521_093931_p5_sw_llmwiki_slice2/agreed_contract.json#design_tokens).
+ *
+ * This file MUST be imported once at the root layout. Components consume only
+ * named tokens; they do not hard-code hex values, durations, or curves.
+ *
+ * Renaming a token requires contract refresh.
+ */
+
+:root {
+  /* Color palette */
+  --surface-base: #F4EFE6;
+  --surface-elevated: #FBF7EE;
+  --surface-sunken: #E8E1D2;
+  --text-primary: #211C16;
+  --text-secondary: #5A5247;
+  --accent-oxblood: #7A2B26;
+  --warn-amber: #B86E1E;
+  --success-moss: #3F5E3A;
+  --danger-rust: #8B3A1F;
+  --border-subtle: #CFC4AE;
+
+  /* Typography pair */
+  --heading-family: "Söhne Breit", "Inter Tight", system-ui, sans-serif;
+  --body-family: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+
+  /* Spacing ladder (Fibonacci-shaped) */
+  --space-xs: 3px;
+  --space-sm: 7px;
+  --space-md: 13px;
+  --space-lg: 21px;
+  --space-xl: 34px;
+  --space-2xl: 55px;
+
+  /* Easing */
+  --ease-deliberate: cubic-bezier(0.22, 1.06, 0.36, 1.0);
+
+  /* Motion durations */
+  --motion-fast: 140ms;
+  --motion-base: 220ms;
+  --motion-slow: 360ms;
+
+  /* Radius */
+  --radius-tight: 2px;
+  --radius-soft: 6px;
+  --radius-pill: 999px;
+  --radius-asymmetric: 2px 12px 2px 12px;
+
+  /* Shadow */
+  --shadow-hairline: 0 0 0 1px rgba(33, 28, 22, 0.06);
+  --shadow-press: inset 0 1px 0 rgba(33, 28, 22, 0.08);
+
+  /* Focus ring composition:
+   *   - 2px gap between element edge and the ring (achieved via outline-offset)
+   *   - 2px outset solid accent-oxblood at 40% alpha
+   *   - Total visual extent: 4px outside the element
+   */
+  --focus-ring-color: rgba(122, 43, 38, 0.4);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+}
+
+/* Reusable focus-ring helper. Components apply this on :focus-visible.
+ * Browser-default outlines are intentionally suppressed in favor of this token. */
+.focus-ring:focus-visible,
+[data-focus-ring]:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
