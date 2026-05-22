@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.llmwiki/schemas/wiki_entry.schema.json",
+  "title": "Wiki Entry — llmwiki adapted from harness-core knowledge_entry",
+  "description": "Generalized wiki entry. Drops the domain const='academic' restriction; renames category-specific Catholic/biblical fields to neutral language; preserves the evidence + source + status state machine.",
+  "type": "object",
+  "required": ["id", "category", "status", "title", "source_ids", "updated_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable entry id (slug or hash)."
+    },
+    "category": {
+      "type": "string",
+      "description": "Domain-neutral category label (was 'category' under domain='academic' in harness-core)."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "reviewed", "verified", "deprecated", "superseded"]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": ["string", "null"]
+    },
+    "source_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "original_terms": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "related": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_from_run": {
+      "type": ["string", "null"]
+    },
+    "created_from_candidates": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_at": {
+      "type": ["string", "null"]
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "review_notes": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": true
+}

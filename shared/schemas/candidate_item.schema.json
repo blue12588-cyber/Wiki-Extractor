@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.llmwiki/schemas/candidate_item.schema.json",
+  "title": "Candidate Item — llmwiki adapted from harness-core chunk_extract.candidate_items[]",
+  "description": "One extracted candidate item. Generalized from the Catholic/academic harness-core schema: the biblical_text type is renamed to religious_text and the language is domain-neutral throughout.",
+  "type": "object",
+  "required": [
+    "local_candidate_id",
+    "title",
+    "type",
+    "category",
+    "summary",
+    "evidence_refs",
+    "suggested_action",
+    "source_id",
+    "span",
+    "evidence_text"
+  ],
+  "properties": {
+    "local_candidate_id": {
+      "type": "string",
+      "description": "Stable SHA-256-prefix-derived id (16 hex chars). Same source_id+type+span -> same id."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "concept",
+        "argument",
+        "method",
+        "scholar",
+        "religious_text",
+        "objection",
+        "quotation",
+        "other"
+      ],
+      "description": "Generalized from harness-core common.schema.json#candidate_type. biblical_text -> religious_text."
+    },
+    "category": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "suggested_action": {
+      "type": "string",
+      "enum": [
+        "augment_existing",
+        "create_new",
+        "merge",
+        "defer",
+        "reject"
+      ]
+    },
+    "source_id": {
+      "type": "string",
+      "description": "SHA-256 hex prefix (16 chars) of the source content."
+    },
+    "page": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based page number for PDF inputs; absent for plaintext/markdown."
+    },
+    "span": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "evidence_text": {
+      "type": "string",
+      "description": "Verbatim text fragment from the source supporting this candidate."
+    },
+    "target_wiki_hint": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}
