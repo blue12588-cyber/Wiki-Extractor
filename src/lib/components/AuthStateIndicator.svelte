@@ -32,24 +32,24 @@
   let { state = 'unconfigured' as AuthIndicatorState }: Props = $props();
 
   const labels: Record<AuthIndicatorState, string> = {
-    'unconfigured': 'Auth not configured',
-    'codex-detected': 'Codex auth detected',
-    'oauth-child-up': 'Proxy ready',
-    'degraded': 'Proxy degraded',
-    'dev-fallback-active': 'Dev fallback',
+    'unconfigured': '인증 미설정',
+    'codex-detected': 'Codex 인증 감지됨',
+    'oauth-child-up': '프록시 준비됨',
+    'degraded': '프록시 응답 저하',
+    'dev-fallback-active': '개발용 대체 모드',
   };
 
   const tooltips: Record<AuthIndicatorState, string> = {
     'unconfigured':
-      'Codex auth file not found. Run `npx @openai/codex login` to enable LLM features.',
+      'Codex 인증 파일을 찾을 수 없습니다. `npx @openai/codex login`을 실행하면 LLM 기능을 사용할 수 있습니다.',
     'codex-detected':
-      'Codex auth file present. LLM features available once the proxy starts.',
+      'Codex 인증 파일이 있습니다. 프록시가 시작되면 LLM 기능을 사용할 수 있습니다.',
     'oauth-child-up':
-      'openai-oauth child up at http://127.0.0.1:<port>/v1.',
+      'openai-oauth 자식 프로세스가 http://127.0.0.1:<port>/v1 에서 실행 중입니다.',
     'degraded':
-      'openai-oauth child exited or readiness signal not detected; retry pending.',
+      'openai-oauth 자식 프로세스가 종료되었거나 준비 신호가 감지되지 않았습니다. 재시도 대기 중입니다.',
     'dev-fallback-active':
-      'Dev-fallback flag set or no Codex auth file. LLM features stubbed.',
+      '개발용 대체 플래그가 설정되었거나 Codex 인증 파일이 없습니다. LLM 기능은 스텁(모의)으로 동작합니다.',
   };
 </script>
 

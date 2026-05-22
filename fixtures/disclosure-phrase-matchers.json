@@ -1,39 +1,38 @@
 {
+  "$comment": "Slice 4 (AC-KOREAN-UI / decision b): the DisclosureBanner was Korean-ized; this single source of truth was updated in lock-step so the T1 banner-audit asserts the Korean phrasing. The legal/security MEANING of each of the four required phrases is unchanged — only the language. Each matcher is a substring that appears verbatim in DisclosureBanner.svelte (phrase rows and/or the why-body).",
   "phrases": [
     {
       "id": "community-unofficial",
       "description": "openai-oauth is community-maintained and not affiliated with OpenAI.",
       "matchers": [
-        "community / unofficial",
-        "community/unofficial",
-        "not affiliated with OpenAI",
-        "unofficial, community-maintained"
+        "커뮤니티 / 비공식 프로젝트",
+        "OpenAI와 무관합니다",
+        "비공식이며 커뮤니티가 유지보수하는"
       ]
     },
     {
       "id": "tos-risk",
       "description": "Using ChatGPT credentials carries Terms of Service risk.",
       "matchers": [
-        "OpenAI Terms of Service risk",
-        "Terms of Service risk",
-        "ToS risk"
+        "OpenAI 이용약관 위반 위험",
+        "이용약관 위반 위험",
+        "그 위험은 사용자가 감수합니다"
       ]
     },
     {
       "id": "password-equivalent",
       "description": "auth.json is password-equivalent; do not share or host.",
       "matchers": [
-        "password-equivalent",
-        "do not share or host"
+        "비밀번호와 동등",
+        "공유하거나 호스팅하지 마세요"
       ]
     },
     {
       "id": "single-machine",
       "description": "Personal use on this single machine only.",
       "matchers": [
-        "Personal use on this single machine",
-        "single-machine personal use",
-        "single-user machine"
+        "이 단일 기기에서 개인 용도로만",
+        "단일 사용자 기기에서의 개인적"
       ]
     }
   ]
