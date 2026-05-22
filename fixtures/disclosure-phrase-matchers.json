@@ -1,0 +1,40 @@
+{
+  "phrases": [
+    {
+      "id": "community-unofficial",
+      "description": "openai-oauth is community-maintained and not affiliated with OpenAI.",
+      "matchers": [
+        "community / unofficial",
+        "community/unofficial",
+        "not affiliated with OpenAI",
+        "unofficial, community-maintained"
+      ]
+    },
+    {
+      "id": "tos-risk",
+      "description": "Using ChatGPT credentials carries Terms of Service risk.",
+      "matchers": [
+        "OpenAI Terms of Service risk",
+        "Terms of Service risk",
+        "ToS risk"
+      ]
+    },
+    {
+      "id": "password-equivalent",
+      "description": "auth.json is password-equivalent; do not share or host.",
+      "matchers": [
+        "password-equivalent",
+        "do not share or host"
+      ]
+    },
+    {
+      "id": "single-machine",
+      "description": "Personal use on this single machine only.",
+      "matchers": [
+        "Personal use on this single machine",
+        "single-machine personal use",
+        "single-user machine"
+      ]
+    }
+  ]
+}
