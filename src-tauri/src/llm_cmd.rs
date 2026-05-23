@@ -114,7 +114,7 @@ fn load_config() -> LlmConfig {
     // a coherent (degraded) config rather than a crash.
     LlmConfig {
         model: "gpt-5.4".to_string(),
-        endpoint_template: "{base}/chat/completions".to_string(),
+        endpoint_template: "{base}/responses".to_string(),
         auth: "oauth_subscription".to_string(),
         request: default_request_cfg(),
     }
@@ -187,34 +187,78 @@ NEVER alter, paraphrase, or replace the ORIGINAL text — it is preserved verbat
 Preserve original-language terms (Hebrew/Greek/Latin) inline with transliteration + meaning where helpful.
 Return ONLY JSON: {"translation": "<Korean translation>"}."#;
 
-/* ---------------- Chat request plumbing ---------------- */
+/* ---------------- Responses API plumbing (openai-oauth proxy) ----------------
+
+The openai-oauth proxy (EvanZhouDev) exposes ONLY the OpenAI **Responses API** at
+`<base>/responses` — NOT Chat Completions. Verified against ima2-gen's working
+client (`lib/oauthProxy.js::generateViaOAuth` → POST `${url}/v1/responses` with an
+`input:[{role,content}]` body). Posting Chat Completions (`/chat/completions` with
+`messages`) to it failed at the transport layer ("error sending request"). We
+therefore speak Responses. Recorded in docs/adaptation-from-harness-core.md. */
 
 #[derive(Serialize)]
-struct ChatMessage<'a> {
+struct InputMsg<'a> {
     role: &'a str,
     content: String,
 }
 
 #[derive(Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    messages: Vec<ChatMessage<'a>>,
-    temperature: f32,
-    #[serde(rename = "max_tokens")]
-    max_tokens: u32,
+struct ReasoningCfg<'a> {
+    effort: &'a str,
 }
 
+#[derive(Serialize)]
+struct ResponsesRequest<'a> {
+    model: &'a str,
+    input: Vec<InputMsg<'a>>,
+    stream: bool,
+    reasoning: ReasoningCfg<'a>,
+}
+
+// Responses output: an array of items; assistant text lives in `message` items as
+// `content[].text` where the content part type is `output_text`. Reasoning items
+// carry no plaintext. Some proxy/SDK shapes also expose a flattened `output_text`.
 #[derive(Deserialize)]
-struct ChatChoiceMsg {
-    content: Option<String>,
+struct RespContentPart {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    text: Option<String>,
 }
 #[derive(Deserialize)]
-struct ChatChoice {
-    message: ChatChoiceMsg,
+struct RespOutputItem {
+    #[serde(default)]
+    content: Option<Vec<RespContentPart>>,
 }
 #[derive(Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
+struct ResponsesResponse {
+    #[serde(default)]
+    output: Vec<RespOutputItem>,
+    #[serde(default)]
+    output_text: Option<String>,
+}
+
+impl ResponsesResponse {
+    /// Concatenate every `output_text` part, in order. Prefers the flattened
+    /// convenience field when the proxy provides it.
+    fn collect_text(self) -> String {
+        if let Some(t) = self.output_text.filter(|s| !s.trim().is_empty()) {
+            return t;
+        }
+        let mut acc = String::new();
+        for item in self.output {
+            if let Some(parts) = item.content {
+                for p in parts {
+                    if p.kind == "output_text" {
+                        if let Some(t) = p.text {
+                            acc.push_str(&t);
+                        }
+                    }
+                }
+            }
+        }
+        acc
+    }
 }
 
 /// Single-source LLM call. This is the ONLY function that issues an outbound
@@ -230,14 +274,18 @@ async fn chat_completion(system: &str, user: String) -> Result<String, LlmError>
     })?;
     let endpoint = cfg.endpoint_template.replace("{base}", &base);
 
-    let body = ChatRequest {
+    // Responses API body (ima2-proven shape). `developer` carries the system
+    // role; `user` carries the prompt. `stream:false` returns a single JSON. No
+    // `temperature` (reasoning models reject it); a low reasoning effort keeps
+    // extraction fast.
+    let body = ResponsesRequest {
         model: &cfg.model,
-        messages: vec![
-            ChatMessage { role: "system", content: system.to_string() },
-            ChatMessage { role: "user", content: user },
+        input: vec![
+            InputMsg { role: "developer", content: system.to_string() },
+            InputMsg { role: "user", content: user },
         ],
-        temperature: cfg.request.temperature,
-        max_tokens: cfg.request.max_output_tokens,
+        stream: false,
+        reasoning: ReasoningCfg { effort: "low" },
     };
 
     let client = reqwest::Client::builder()
@@ -271,17 +319,16 @@ async fn chat_completion(system: &str, user: String) -> Result<String, LlmError>
         ));
     }
 
-    let parsed: ChatResponse = resp
+    let parsed: ResponsesResponse = resp
         .json()
         .await
         .map_err(|e| LlmError::degraded("bad_response", format!("LLM 응답 파싱 실패: {e}")))?;
 
-    parsed
-        .choices
-        .into_iter()
-        .next()
-        .and_then(|c| c.message.content)
-        .ok_or_else(|| LlmError::degraded("empty_response", "LLM 응답에 본문이 없습니다."))
+    let text = parsed.collect_text();
+    if text.trim().is_empty() {
+        return Err(LlmError::degraded("empty_response", "LLM 응답에 본문이 없습니다."));
+    }
+    Ok(text)
 }
 
 /* ---------------- Public commands ---------------- */
@@ -385,7 +432,8 @@ mod tests {
     fn endpoint_template_fills_base() {
         let cfg = load_config();
         let filled = cfg.endpoint_template.replace("{base}", "http://127.0.0.1:9999/v1");
-        assert_eq!(filled, "http://127.0.0.1:9999/v1/chat/completions");
+        // Responses API (openai-oauth proxy), NOT Chat Completions.
+        assert_eq!(filled, "http://127.0.0.1:9999/v1/responses");
     }
 
     #[test]
