@@ -14,9 +14,15 @@
  * TIER-1 (smoke — fast, structural; run first):
  *   tab-order-usage     5 tabs, 사용법 inserted between 로그인 and 피드백, Korean
  *                       labels, distinct shape cues, isTabId('usage') guards.
- *   sticky-sidebar-css  +layout.svelte sidebar is position:sticky top:0 with a
- *                       bounded height + align-self:start; app-shell hides
- *                       horizontal overflow (AC-STICKY-SIDEBAR markup contract).
+ *   sticky-sidebar-css  EVOLVED by Slice 7 (AC-SIDEBAR-INDEPENDENT): the Slice-6
+ *                       position:sticky sidebar was defeated when the article
+ *                       overflowed the shared grid row, so Slice 7 replaced it
+ *                       with a fixed-viewport flex shell + an independently
+ *                       scrolling sidebar/content. This scenario now asserts the
+ *                       Slice-7 markup contract (flex shell, sidebar height:100vh
+ *                       + overflow-y, content as the single scroll surface,
+ *                       app-shell hides horizontal overflow). The book glyph +
+ *                       no-horizontal-scroll invariants are unchanged guards.
  *   login-spawn-graceful  startCodexLogin() OUTSIDE the Tauri shell returns a
  *                       non-throwing graceful outcome with a Korean message
  *                       (the common preview/degrade path).
@@ -106,38 +112,41 @@ async function tabOrderUsage() {
   pass(report);
 }
 
-// AC-STICKY-SIDEBAR: the sidebar is sticky-pinned + the shell hides x-overflow.
+// AC-SIDEBAR-INDEPENDENT (Slice 7, supersedes the Slice-6 sticky markup): the
+// shell is a fixed-viewport flex row, the sidebar fills 100vh and scrolls only
+// internally, the content column is the single scroll surface, and the shell
+// hides horizontal overflow. Book glyph + 가로 스크롤 0 stay as regression guards.
+function blockOf(src, selector, span = 900) {
+  const i = src.indexOf(selector);
+  if (i < 0) return '';
+  const close = src.indexOf('\n  }', i);
+  return src.slice(i, close > i ? close : i + span);
+}
 async function stickySidebarCss() {
   const layout = read('src/routes/+layout.svelte');
-  // Isolate the .sidebar style block to assert sticky props apply to IT.
-  const sidebarBlock = (() => {
-    const i = layout.indexOf('.sidebar {');
-    if (i < 0) return '';
-    // Slice up to the closing brace of the .sidebar rule (the block carries an
-    // explanatory comment, so a fixed char window can truncate the declarations).
-    const close = layout.indexOf('\n  }', i);
-    return layout.slice(i, close > i ? close : i + 1200);
-  })();
-  const shellBlock = (() => {
-    const i = layout.indexOf('.app-shell {');
-    if (i < 0) return '';
-    return layout.slice(i, i + 400);
-  })();
+  const shellBlock = blockOf(layout, '.app-shell {', 500);
+  const sidebarBlock = blockOf(layout, '.sidebar {');
+  const contentBlock = blockOf(layout, '.content {');
   const report = {
     scenario: 'sticky-sidebar-css',
-    sidebar_position_sticky: /position:\s*sticky/.test(sidebarBlock),
-    sidebar_top_zero: /top:\s*0/.test(sidebarBlock),
-    sidebar_align_start: /align-self:\s*start/.test(sidebarBlock),
-    sidebar_bounded_height: /max-height:\s*100vh/.test(sidebarBlock),
+    // Slice 7: the OLD sticky approach must be gone from the sidebar.
+    sidebar_not_sticky: !/position:\s*sticky/.test(sidebarBlock),
+    shell_is_flex: /display:\s*flex/.test(shellBlock),
+    shell_viewport_height: /height:\s*100vh/.test(shellBlock),
+    sidebar_fixed_track: /flex:\s*0 0 220px/.test(sidebarBlock),
+    sidebar_full_height: /height:\s*100vh/.test(sidebarBlock),
     sidebar_overflow_y: /overflow-y:\s*auto/.test(sidebarBlock),
+    content_scroll_surface: /height:\s*100vh/.test(contentBlock) && /overflow-y:\s*auto/.test(contentBlock),
     shell_no_x_overflow: /overflow-x:\s*hidden/.test(shellBlock),
     book_glyph_present: layout.includes("tab.shape === 'book'"),
   };
-  if (!report.sidebar_position_sticky) return fail(report, 'sidebar is not position:sticky');
-  if (!report.sidebar_top_zero) return fail(report, 'sidebar has no top:0 anchor');
-  if (!report.sidebar_align_start) return fail(report, 'sidebar lacks align-self:start (sticky defeated by row-stretch)');
-  if (!report.sidebar_bounded_height) return fail(report, 'sidebar lacks max-height:100vh (tall menu could clip)');
+  if (!report.sidebar_not_sticky) return fail(report, 'sidebar still uses the superseded position:sticky (Slice-7 replaces it)');
+  if (!report.shell_is_flex) return fail(report, 'app-shell is not a flex row (independent-scroll shell)');
+  if (!report.shell_viewport_height) return fail(report, 'app-shell is not pinned to height:100vh');
+  if (!report.sidebar_fixed_track) return fail(report, 'sidebar is not a fixed 220px flex track');
+  if (!report.sidebar_full_height) return fail(report, 'sidebar does not fill the viewport height (100vh)');
   if (!report.sidebar_overflow_y) return fail(report, 'sidebar lacks internal overflow-y for short viewports');
+  if (!report.content_scroll_surface) return fail(report, 'content column is not the single scroll surface (height:100vh + overflow-y)');
   if (!report.shell_no_x_overflow) return fail(report, 'app-shell does not guard horizontal scroll (가로 스크롤 0)');
   if (!report.book_glyph_present) return fail(report, 'usage tab book shape glyph not rendered');
   pass(report);

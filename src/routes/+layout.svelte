@@ -14,6 +14,22 @@
   Active-tab signal is triple-encoded for accessibility (AC-NAV): shape glyph +
   aria-current="page" + accent colour. Shape + aria-current work without colour.
 
+  Slice-7 layout (AC-SIDEBAR-INDEPENDENT): the shell is a fixed-viewport flex row
+  (height:100vh, no body scroll). The sidebar is its OWN flex track that fills the
+  viewport height and scrolls internally only if its menu ever overflows — it does
+  NOT participate in the main content's scroll, so all five tabs stay visible and
+  clickable no matter how far the article scrolls. The `.content` column is the
+  single scroll surface; an inner `.content-inner` keeps the reading column
+  centered with a max-width (AC-LAYOUT-NO-HSCROLL: 가로 스크롤 0 + 중앙 정렬 유지).
+  This replaces the Slice-6 `position:sticky` sidebar, which was defeated when the
+  content overflowed the shared grid row (the menu scrolled away with the body).
+
+  Tab rows are full-width (AC-TAB-FULLWIDTH): each `.tab` spans the sidebar width
+  edge-to-edge as a single row (no carved box / card border / radius). The active
+  row is marked by a left oxblood rail PLUS a background contrast and a filled
+  shape glyph — three redundant cues so the active tab is unambiguous without
+  relying on colour alone (color-blind safe).
+
   All copy is Korean (AC-KOREAN-UI).
 -->
 <script lang="ts">
@@ -72,6 +88,7 @@
             title={tab.hint}
             onclick={() => select(tab.id)}
           >
+            <span class="tab-inner">
             <span class="tab-shape" aria-hidden="true">
               {#if tab.shape === 'square'}
                 <svg viewBox="0 0 16 16" width="14" height="14"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" /></svg>
@@ -86,6 +103,7 @@
               {/if}
             </span>
             <span class="tab-label">{tab.label}</span>
+            </span>
           </button>
         </li>
       {/each}
@@ -93,7 +111,9 @@
   </nav>
 
   <main class="content">
-    {@render children()}
+    <div class="content-inner">
+      {@render children()}
+    </div>
   </main>
 </div>
 
@@ -104,6 +124,11 @@
     background: var(--surface-base);
     color: var(--text-primary);
     font-family: var(--body-family);
+    /* AC-SIDEBAR-INDEPENDENT: the body itself never scrolls — the shell is exactly
+       100vh and the .content column is the only scroll surface. This is what keeps
+       the sidebar pinned (it cannot ride a body scroll that does not exist). */
+    height: 100%;
+    overflow: hidden;
   }
 
   :global(*:focus-visible) {
@@ -112,32 +137,32 @@
   }
 
   .app-shell {
-    display: grid;
-    grid-template-columns: 220px 1fr;
-    min-height: 100vh;
-    /* No horizontal overflow: the grid track is fixed (220px) + 1fr; the content
-       column owns its own wrapping. (AC-STICKY-SIDEBAR: 가로 스크롤 0) */
+    /* AC-SIDEBAR-INDEPENDENT: a fixed-viewport flex row. The shell is exactly the
+       viewport height and never scrolls itself; each child track owns its own
+       overflow, so the sidebar and the article scroll independently. This is what
+       guarantees the five tabs stay on-screen no matter how long the article is —
+       unlike the Slice-6 sticky sidebar, which rode the shared grid-row scroll. */
+    display: flex;
+    height: 100vh;
+    /* No horizontal overflow at the shell level: the sidebar track is fixed
+       (220px) and the content column wraps its own text. (AC-LAYOUT-NO-HSCROLL) */
     overflow-x: hidden;
   }
 
   .sidebar {
+    /* Fixed-width track that fills the full viewport height. It is independent of
+       the content scroll; it only scrolls INTERNALLY if its own menu were ever to
+       overflow a very short viewport (overflow-y:auto), never dropping a tab. */
+    flex: 0 0 220px;
+    height: 100vh;
+    overflow-y: auto;
     border-right: 1px solid var(--border-subtle);
     background: var(--surface-sunken);
     padding: var(--space-xl) var(--space-md);
     display: flex;
     flex-direction: column;
     gap: var(--space-xl);
-    /* AC-STICKY-SIDEBAR: the sidebar stays pinned to the top of the viewport so
-       every tab is always visible + clickable no matter how far the main
-       content scrolls. `align-self: start` keeps the sticky box from being
-       stretched to the full grid-row height (which would defeat sticky); the
-       capped height + internal scroll handle a viewport shorter than the tab
-       list without ever clipping a tab off-screen. */
-    position: sticky;
-    top: 0;
-    align-self: start;
-    max-height: 100vh;
-    overflow-y: auto;
+    box-sizing: border-box;
   }
 
   .brand {
@@ -165,20 +190,26 @@
   .tab-list {
     list-style: none;
     margin: 0;
+    /* AC-TAB-FULLWIDTH: rows run edge-to-edge of the sidebar. Negative inline
+       margins cancel the sidebar's horizontal padding so each row reaches the
+       full sidebar width (끝까지 가는 한 줄) instead of sitting inside an inset
+       box. The vertical sidebar padding is preserved. */
+    margin-inline: calc(-1 * var(--space-md));
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--space-xs);
+    /* No gap: rows stack as a contiguous full-width list (not separated cards). */
+    gap: 0;
   }
 
   .tab {
+    /* Full-width single row — no carved box, no card border, no radius. */
+    display: block;
     width: 100%;
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-    border: 1px solid transparent;
-    border-radius: var(--radius-soft);
+    box-sizing: border-box;
+    padding: var(--space-md);
+    border: none;
+    border-radius: 0;
     background: transparent;
     color: var(--text-secondary);
     font-family: var(--heading-family);
@@ -186,11 +217,20 @@
     font-weight: 600;
     cursor: pointer;
     text-align: left;
-    /* Left rail marker is drawn via the active border-left, not colour alone. */
+    /* Active marker = a left oxblood rail. Reserved transparently on every row so
+       the label does not shift when a row becomes active (color-blind cue: the
+       rail is a SHAPE change, independent of the colour). */
     border-left: 3px solid transparent;
     transition: color var(--motion-fast) var(--ease-deliberate),
       background var(--motion-fast) var(--ease-deliberate),
       border-color var(--motion-fast) var(--ease-deliberate);
+  }
+
+  /* Glyph + label sit on one line; the row itself is the full-width block. */
+  .tab-inner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
   }
 
   .tab:hover {
@@ -198,10 +238,12 @@
     background: var(--surface-base);
   }
 
+  /* AC-TAB-FULLWIDTH active state: three redundant cues — left oxblood rail
+     (shape), a background contrast (surface-elevated), and the filled glyph
+     below — so the active row reads without relying on colour alone. */
   .tab.active {
     color: var(--text-primary);
     background: var(--surface-elevated);
-    border-color: var(--border-subtle);
     border-left-color: var(--accent-oxblood);
   }
 
@@ -226,7 +268,23 @@
   }
 
   .content {
+    /* AC-SIDEBAR-INDEPENDENT: the content column is the single scroll surface.
+       It fills the remaining width, owns the full viewport height, and scrolls
+       internally — the sidebar is untouched by this scroll. */
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
     padding: var(--space-xl) var(--space-2xl);
+    box-sizing: border-box;
+  }
+
+  /* AC-LAYOUT-NO-HSCROLL: the reading column keeps its max-width and is centered
+     within the (now full-width) scroll column, preserving the centered aesthetic
+     while the scrollbar tracks the full content area. */
+  .content-inner {
     max-width: 860px;
+    margin-inline: auto;
   }
 </style>
