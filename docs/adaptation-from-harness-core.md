@@ -518,8 +518,117 @@ warning). Behaviour preserved: detect-first, auth write 0, access-token display 
 graceful copy-paste degrade, no copy-paste/auto/sidebar regression. tauri build: see
 implementation_manifest (`target_commit` slice8-repair).
 
+## Slice 9 — codex detect Windows-`.cmd` bug fix + WSL cross-boundary fallback
+
+**Status**: SUBSTANTIVE (Slice 9, run `run_20260523_000011_sw_llmwiki_slice9`).
+A bug-fix + cross-boundary slice on top of Slice 5c/6/8. No NEW harness-core
+*source file* was ported; this slice refines the existing codex-auth detection
+surface (adapted from the ima2 `codexDetect`/`oauthLauncher` pattern) and
+STRENGTHENS the academic source-extraction PROMPT that was already adapted from
+`domains/academic/source-extractor.md` + `candidate-evaluator.md`. Recorded here
+per the contract's "every harness-core adaptation recorded … (UI/auth fix면 간략)"
+clause.
+
+### Upstream pin (Slice 9)
+
+- **upstream HEAD observed at Slice 9 start**: `b381f880` (`harness-core` master).
+  A parallel SW gate track may advance this during the run; that is external and
+  is NOT a Slice-9 write — THIS run touches nothing under the harness-core working
+  tree (writes are confined to `D:\AI Project\llmwiki\**` + `runs/<run_id>/`).
+- **upstream branch**: `master`.
+
+### What changed (Slice 9)
+
+- **AC-DETECT-WIN-CMD (the core bug)**: `codex_detect.rs::probe_login_status`
+  previously did `Command::new(bin).args(["login","status"])` with `bin` iterating
+  `["codex.cmd","codex.exe","codex"]`. On Windows, spawning the `codex.cmd` npm
+  shim directly fails — `CreateProcess` cannot execute a `.cmd`/`.bat` shim, only
+  `cmd.exe` resolves it — so every candidate erred → `Missing` → a false
+  "인증 미설정 / codex CLI 미설치" even with codex installed+authed. **Fix**: the
+  Windows probe now routes through `cmd /C codex login status` (a new
+  `build_probe_command` helper), the SAME convention the sibling
+  `codex_login.rs::build_command` already used. `cmd.exe` resolves the shim and is
+  unaffected by PowerShell's ExecutionPolicy (which only gates `.ps1`). Off-Windows
+  keeps the direct `Command::new(bin)`. Probe stays fully read-only (stdio null,
+  `login status` only) with the bounded `PROBE_TIMEOUT` poll loop intact.
+- **AC-DETECT-WSL-FALLBACK**: when the Windows-native probe yields `Missing`, a
+  single cross-boundary probe `wsl.exe -- codex login status` runs (guarded by
+  `cfg!(windows)`), detecting a codex install that lives only inside WSL Ubuntu
+  (the project owner's setup). A new `CodexOrigin` enum (`windows`|`wsl`|`none`,
+  serde snake_case) is added to `CodexDetect` recording WHERE auth was found.
+  `codex_cli_missing` is now derived from the EFFECTIVE (post-fallback) probe, so
+  install guidance shows only when codex is found NOWHERE. Both probes are
+  read-only; both shell calls use FIXED-LITERAL args (the only interpolated value
+  is `bin` from the fixed candidate list — never user input).
+- **AC-PROXY-ORIGIN**: `oauth_child.rs::spawn_oauth_child` now takes the detected
+  `CodexOrigin` and branches the proxy spawn via a new `build_proxy_command`:
+  `wsl` → `wsl.exe -- npx openai-oauth --port <P>` (cross-boundary; the proxy
+  binds 127.0.0.1:<port> inside WSL2, reachable from Windows via mirrored
+  networking — best-effort, WSL2 forwarding verified later by the user); else
+  `cmd /C npx …` (Windows) / bare `npx …` (non-Windows). `oauth_proxy_start`
+  resolves the origin from a single READ-ONLY `detect_codex()` (login status only;
+  zero auth.json writes). Every spawn failure (incl. a failed WSL spawn) sets a
+  `Degraded` Korean status → the renderer falls back to copy-paste cleanly (never
+  a crash, never a hang — the bounded ready-timeout still applies). Fixed-literal
+  args (only the numeric port is interpolated).
+- **AC-AUTO-EXTRACT-CONFIRM**: the auto-LLM flow (`autoExtract.ts`:
+  `buildPrompt → provider.runExtraction → parseResponse → validateResponse`) was
+  already correct LLM-direct extraction — confirmed intact and wired, NOT
+  rewritten (it was simply unreachable because detect always returned Missing on
+  Windows). The only enhancement is `promptBuilder.ts::ROLE_BLOCK`: it now
+  explicitly instructs the academic **7-type** extraction (concept/argument/
+  method/scholar/religious_text/objection/quotation — mirroring
+  `EXTRACT_SYSTEM_PROMPT`) and the **목차(table-of-contents) classification** (each
+  candidate's `schema_field` is classified against the user's outline — mirroring
+  `CLASSIFY_SYSTEM_PROMPT`), with verbatim/Catholic-terminology and the chunk_id
+  anti-forgery instruction preserved. The `responseValidator.ts` anti-forgery gate
+  (forged/hallucinated chunk_ids rejected + quarantined) is UNCHANGED — a forged
+  chunk_id from the auto LLM is rejected exactly like one from a manual paste.
+- **AC-USAGE-AUTO-SETUP**: `UsageTab.svelte` gains a distinct "자동 모드 설정법
+  (고급)" section (separate from the default copy-paste steps): open PowerShell →
+  `npm i -g @openai/codex` → `codex login` (browser ChatGPT OAuth, free/subscription
+  — uses the user's own quota) → press [다시 검출] and auto mode becomes available.
+  Korean, non-technical-friendly, framed as optional/advanced; the Slice-8
+  outline-first guidance and the five default steps are untouched.
+
+### App-auth-write-0 preserved (HARD boundary, unchanged)
+
+Both detection probes and the proxy-origin resolver are READ-ONLY (`login status`
+only). The app still writes ZERO to codex `auth.json`; the only auth-path stat is
+delegated to `external_dep_paths` (the SOLE AC-7-relaxed module). The Slice-8
+shell-free URL opener (rundll32 + host allow-list) is untouched. The new shell
+calls (`cmd /C codex …`, `wsl.exe -- codex …`, `wsl.exe -- npx …`) interpolate
+ONLY fixed compile-time literals — zero user-input injection surface.
+
+### What was NOT adapted (Slice 9)
+
+- A WSL-distro selector / explicit `-d <distro>` flag — `wsl.exe -- …` uses the
+  default distro (best-effort; the project owner runs a single Ubuntu). A
+  multi-distro selector is deferred.
+- WSL2 localhost forwarding setup — relied on as a host capability (mirrored
+  networking), not configured by the app; verified later by the user (contract
+  deferred_question). A failed cross-boundary proxy degrades to copy-paste.
+- Bundling codex/Node (Windows or WSL) — advanced users supply their own; the app
+  detects + guides only (contract exclude; codex 강요 0).
+- API-key mode — `future` placeholder unchanged (contract_refresh_required_when
+  implemented).
+
+New smoke scenarios (`fixtures/t1-slice9-smoke.mjs`): Tier-1 `detect-win-cmd`,
+`origin-defaults`, `usage-auto-setup`, `auto-extract-prompt`; Tier-2
+`wsl-fallback`, `proxy-origin`, `no-authwrite-detect`, `evidence-forgery-kept` —
+all green. The Slice-5b `prompt-build` scenario's `has_role` assertion was EVOLVED
+in place to the strengthened role wording (the slice-supersedes-slice precedent),
+adding `has_seven_types` + `has_outline_classification` assertions; the Slice-5c
+`provider-availability` fixture's `CodexDetectSnapshot` literals gained the new
+`origin` field. Slice 8 (8) + 5c (7) + 5b (2 touched) regression + T1 static-scan
+(0 violations) green; svelte-check 0 errors (1 pre-existing node-types warning);
+44 Rust lib tests pass (was 31 — +13: codex_detect origin/probe-routing/
+fixed-literal guards + oauth_child proxy-origin branch guards). tauri build: see
+implementation report.
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 9, run `run_20260523_000011_sw_llmwiki_slice9`).
 - `agreed_contract.json` (Slice 8, run `run_20260523_000010_sw_llmwiki_slice8`).
 - `agreed_contract.json` (Slice 6, run `run_20260523_000008_sw_llmwiki_slice6`).
 - `agreed_contract.json` (Slice 5c, run `run_20260523_000007_sw_llmwiki_slice5c`).

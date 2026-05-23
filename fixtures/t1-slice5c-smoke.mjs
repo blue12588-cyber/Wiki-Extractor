@@ -138,12 +138,14 @@ async function providerAvailability() {
     auth_file_present: true,
     login_probe: 'authed',
     codex_cli_missing: false,
+    origin: 'windows',
   });
   const whenMissing = providerAvailabilities({
     available: false,
     auth_file_present: false,
     login_probe: 'missing',
     codex_cli_missing: true,
+    origin: 'none',
   });
 
   const byId = (list, id) => list.find((a) => a.id === id);

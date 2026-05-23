@@ -33,6 +33,30 @@
 //!     public bind would never be marked Ready.
 //!   - **Graceful.** Every failure path sets a `Degraded` status (never panics),
 //!     so the renderer can degrade to copy-paste with a clear Korean message.
+//!
+//! # Slice-9 cross-boundary spawn (AC-PROXY-ORIGIN)
+//!
+//! The proxy spawn now branches on WHERE codex auth was detected
+//! (`codex_detect::CodexOrigin`):
+//!
+//!   - `windows` (or any non-Windows host) → spawn the proxy with the Windows /
+//!     native codex toolchain as before (`cmd /C npx openai-oauth ...` on
+//!     Windows, bare `npx ...` elsewhere).
+//!   - `wsl` → the user's codex lives ONLY inside WSL Ubuntu, so the proxy is
+//!     spawned cross-boundary via `wsl.exe -- npx openai-oauth --port <P>`. The
+//!     proxy binds `127.0.0.1:<port>` inside WSL2; recent Windows reaches that
+//!     loopback from the host via mirrored networking / port forwarding, so the
+//!     parsed `http://127.0.0.1:<port>/v1` ready URL is used as-is (best-effort
+//!     per the contract — WSL2 forwarding is verified later by the user).
+//!
+//! **Graceful degradation is mandatory**: if the cross-boundary spawn fails for
+//! any reason (wsl.exe absent, npx missing in WSL, no ready line, port not
+//! reachable from Windows), the spawn pipeline sets `Degraded` with a Korean
+//! reason and the renderer falls back to copy-paste cleanly — never a crash,
+//! never a hang (the bounded ready-timeout still applies to the WSL child).
+//!
+//! All new shell args are FIXED LITERALS (`wsl.exe`, `--`, `npx`,
+//! `openai-oauth`, `--port`, and the numeric port) — no user input reaches them.
 
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -41,6 +65,8 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+
+use crate::codex_detect::{detect_codex, CodexOrigin};
 
 /// Status reported to the renderer via the `oauth_child_status` Tauri command.
 #[derive(Debug, Clone, Serialize)]
@@ -124,10 +150,47 @@ fn already_ready() -> Option<(u16, String)> {
     None
 }
 
-/// Round-2 spawn pipeline (ima2 oauthLauncher pattern, ported).
+/// Build the `npx openai-oauth --port <P>` spawn command for the detected codex
+/// `origin` (Slice 9, AC-PROXY-ORIGIN). FIXED-LITERAL args only — the sole
+/// interpolated value is the numeric `port` (a `u16`, never user text):
+///
+///   - `Wsl` → `wsl.exe -- npx openai-oauth --port <P>` (cross-boundary: the
+///     user's codex lives in WSL; the proxy binds 127.0.0.1:<port> inside WSL2,
+///     reachable from Windows via mirrored networking — best-effort).
+///   - `Windows` → `cmd /C npx openai-oauth --port <P>` (the `.cmd` npm shim
+///     needs cmd.exe to resolve on PATH).
+///   - `None` on Windows → still `cmd /C npx ...` (no WSL detected; the spawn
+///     will simply degrade if npx is also absent natively).
+///   - any origin on a non-Windows host → bare `npx openai-oauth --port <P>`.
+fn build_proxy_command(origin: CodexOrigin, port: u16) -> Command {
+    let port_arg = port.to_string();
+    if cfg!(windows) {
+        if origin == CodexOrigin::Wsl {
+            // Cross-boundary: run the proxy inside WSL. Fixed-literal args.
+            let mut c = Command::new("wsl.exe");
+            c.args(["--", "npx", "openai-oauth", "--port", &port_arg]);
+            c
+        } else {
+            // Windows-native: `npx` is a `.cmd` shim → route through cmd.exe.
+            let mut c = Command::new("cmd");
+            c.args(["/C", "npx", "openai-oauth", "--port", &port_arg]);
+            c
+        }
+    } else {
+        // Non-Windows: no WSL split; spawn npx directly.
+        let mut c = Command::new("npx");
+        c.args(["openai-oauth", "--port", &port_arg]);
+        c
+    }
+}
+
+/// Round-2 spawn pipeline (ima2 oauthLauncher pattern, ported; Slice-9
+/// origin-branched).
 ///
 ///   1. Spawn `npx openai-oauth --port <P>` (P=0 → child picks a free port)
-///      via `tokio::process::Command`, stdout+stderr piped, `kill_on_drop`.
+///      via `tokio::process::Command`, routed by the detected codex `origin`
+///      (`wsl` → `wsl.exe -- npx …`; else `cmd /C npx …` / bare `npx …`),
+///      stdout+stderr piped, `kill_on_drop`.
 ///   2. Read child stdout AND stderr line-by-line until `parse_ready_line`
 ///      returns Some(_) or the ready timeout fires.
 ///   3. On ready: store the child in `CHILD_HANDLE`, set `Ready { port, url }`.
@@ -135,8 +198,12 @@ fn already_ready() -> Option<(u16, String)> {
 ///   5. On early exit / spawn error: set `Degraded`, return the error variant.
 ///
 /// The caller (a Tauri command) maps every error to a graceful degradation
-/// signal; the app never dies on a failed spawn (AC-GRACEFUL).
-pub async fn spawn_oauth_child(port_hint: Option<u16>) -> Result<OAuthChild, OAuthChildError> {
+/// signal; the app never dies on a failed spawn — including a failed
+/// cross-boundary WSL spawn (AC-GRACEFUL + AC-PROXY-ORIGIN).
+pub async fn spawn_oauth_child(
+    port_hint: Option<u16>,
+    origin: CodexOrigin,
+) -> Result<OAuthChild, OAuthChildError> {
     // Idempotent: if a proxy is already Ready, reuse it.
     if let Some((port, url)) = already_ready() {
         return Ok(OAuthChild { port, ready_url: url });
@@ -145,24 +212,8 @@ pub async fn spawn_oauth_child(port_hint: Option<u16>) -> Result<OAuthChild, OAu
     set_status(ChildStatus::Spawning);
     let port = port_hint.unwrap_or(0);
 
-    // `npx openai-oauth --port <P>`. On Windows `npx` is a `.cmd` shim, so we
-    // route through the platform shell to resolve it on PATH (matching the
-    // T1-oauth-spawn fixture's `shell: true` on win32).
-    let mut command = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args([
-            "/C",
-            "npx",
-            "openai-oauth",
-            "--port",
-            &port.to_string(),
-        ]);
-        c
-    } else {
-        let mut c = Command::new("npx");
-        c.args(["openai-oauth", "--port", &port.to_string()]);
-        c
-    };
+    // Branch the spawn on the detected origin (Slice 9). Fixed-literal args.
+    let mut command = build_proxy_command(origin, port);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -170,7 +221,14 @@ pub async fn spawn_oauth_child(port_hint: Option<u16>) -> Result<OAuthChild, OAu
         .kill_on_drop(true);
 
     let mut child = command.spawn().map_err(|e| {
-        let reason = format!("openai-oauth 자식 프로세스를 시작할 수 없습니다(npx/Node 확인): {e}");
+        // Origin-aware Korean reason: a WSL cross-boundary spawn failure is
+        // attributed to WSL/wsl.exe so the user knows the fallback was attempted;
+        // both reasons reassure that copy-paste keeps working (AC-GRACEFUL).
+        let reason = if origin == CodexOrigin::Wsl {
+            format!("WSL의 openai-oauth 프록시를 시작할 수 없습니다(wsl.exe/WSL 내 npx·Node 확인). 복붙 모드로 전환합니다: {e}")
+        } else {
+            format!("openai-oauth 자식 프로세스를 시작할 수 없습니다(npx/Node 확인). 복붙 모드로 전환합니다: {e}")
+        };
         set_status(ChildStatus::Degraded { reason: reason.clone() });
         OAuthChildError::SpawnFailed(reason)
     })?;
@@ -301,9 +359,19 @@ pub fn oauth_child_status() -> ChildStatus {
 /// command error) so the renderer always gets a status object and degrades to
 /// copy-paste gracefully (AC-GRACEFUL). The auto-LLM provider calls this once
 /// when the user toggles auto mode on.
+///
+/// Slice-9 (AC-PROXY-ORIGIN): the spawn is branched on WHERE codex auth was
+/// detected. We resolve the origin from a single READ-ONLY `detect_codex()` call
+/// (login status only — zero auth.json writes), so a WSL-only codex install is
+/// driven through `wsl.exe -- npx …` while a Windows-native install uses
+/// `cmd /C npx …` as before. A failed cross-boundary spawn degrades gracefully.
 #[tauri::command]
 pub async fn oauth_proxy_start() -> ChildStatus {
-    match spawn_oauth_child(None).await {
+    // READ-ONLY origin resolution: detect_codex runs `codex login status` only
+    // and never writes the auth file. `origin` tells us which toolchain
+    // (Windows-native vs WSL) backs the proxy spawn.
+    let origin = detect_codex().origin;
+    match spawn_oauth_child(None, origin).await {
         Ok(_) => oauth_child_status(),
         Err(_) => {
             // spawn_oauth_child already set a Degraded status with a Korean
@@ -341,5 +409,54 @@ mod tests {
     fn rejects_non_loopback() {
         let line = "http://0.0.0.0:10531/v1";
         assert_eq!(parse_ready_line(line), None);
+    }
+
+    // AC-PROXY-ORIGIN: build_proxy_command must branch on origin without
+    // panicking and accept the numeric port as its only interpolated value.
+    // (We cannot introspect tokio Command args cross-platform without spawning,
+    // so this exercises the cfg/origin branches for shape safety.)
+    #[test]
+    fn build_proxy_command_branches_without_panic() {
+        let _ = build_proxy_command(CodexOrigin::Windows, 0);
+        let _ = build_proxy_command(CodexOrigin::Wsl, 10531);
+        let _ = build_proxy_command(CodexOrigin::None, 8080);
+    }
+
+    // AC-PROXY-ORIGIN: source-level guard — the WSL arm routes through
+    // `wsl.exe -- npx openai-oauth --port <P>` with FIXED-LITERAL args (no
+    // user-input interpolation; the only non-literal is the numeric port). The
+    // Windows-native arm keeps `cmd /C npx …`. Pins the routing shape so a future
+    // edit cannot silently break the cross-boundary spawn or add an injection sink.
+    #[test]
+    fn proxy_spawn_origin_branch_is_fixed_literal() {
+        let src = include_str!("oauth_child.rs");
+        // WSL cross-boundary spawn.
+        assert!(
+            src.contains("Command::new(\"wsl.exe\")")
+                && src.contains("\"--\", \"npx\", \"openai-oauth\", \"--port\", &port_arg"),
+            "WSL proxy spawn must be `wsl.exe -- npx openai-oauth --port <P>` with fixed literals"
+        );
+        // Windows-native spawn (cmd shim).
+        assert!(
+            src.contains("Command::new(\"cmd\")")
+                && src.contains("\"/C\", \"npx\", \"openai-oauth\", \"--port\", &port_arg"),
+            "Windows-native proxy spawn must route `npx` through `cmd /C` with fixed literals"
+        );
+        // The spawn branches on the detected origin.
+        assert!(
+            src.contains("origin == CodexOrigin::Wsl"),
+            "proxy spawn must branch on the detected codex origin"
+        );
+        // No formatted/concatenated argument is passed to the proxy command
+        // (only the numeric port, via `port.to_string()`, is interpolated). The
+        // needles are built at runtime so this assertion's OWN source text does
+        // not contain the literal it forbids (which would self-trip).
+        let fmt = "format!";
+        let arg_fmt = format!("c.arg({fmt}");
+        let args_fmt = format!("c.args([{fmt}");
+        assert!(
+            !src.contains(&arg_fmt) && !src.contains(&args_fmt),
+            "proxy spawn args must be fixed literals (no format-built args)"
+        );
     }
 }

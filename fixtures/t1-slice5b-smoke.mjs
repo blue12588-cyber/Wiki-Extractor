@@ -110,13 +110,22 @@ async function promptBuild() {
   const report = {
     scenario: 'prompt-build',
     deterministic: p1 === p2,
-    has_role: p1.includes('개인 학술 위키 후보 정리 도우미'),
+    // Slice-9 strengthened the role block (academic 7-type extraction + 목차
+    // classification). The role wording evolved from "후보 정리 도우미" to
+    // "원문 추출·분류 도우미"; this assertion tracks the new, superseding text.
+    has_role: p1.includes('원문 추출·분류 도우미'),
     has_no_guess: p1.includes('추측하지 말고'),
     has_catholic: p1.includes('가톨릭 용어 우선'),
     has_schema: p1.includes('[SCHEMA]') && p1.includes('탄식 시편'),
     has_chunks: p1.includes('[CANDIDATE_CHUNKS]') && p1.includes('chunk_id: chunk-real-0'),
     has_chunk_text_verbatim: p1.includes('하느님께 대한 신뢰의 표현이라고 주장한다'),
     has_output_format: p1.includes('[OUTPUT_FORMAT]') && p1.includes('wiki_candidates'),
+    // Slice-9 (AC-AUTO-EXTRACT-CONFIRM): the prompt now enumerates the academic
+    // 7 candidate types and asks for 목차(table-of-contents) classification.
+    has_seven_types:
+      p1.includes('concept') && p1.includes('argument') && p1.includes('religious_text') &&
+      p1.includes('objection') && p1.includes('quotation'),
+    has_outline_classification: p1.includes('schema_field') && (p1.includes('목차') || p1.includes('분류')),
     prompt_chunk_ids: promptChunkIds(input),
   };
   if (!report.deterministic) return fail(report, 'prompt not deterministic');
@@ -127,6 +136,8 @@ async function promptBuild() {
   if (!report.has_chunks) return fail(report, 'CANDIDATE_CHUNKS / chunk_id missing');
   if (!report.has_chunk_text_verbatim) return fail(report, 'verbatim chunk text not preserved in prompt');
   if (!report.has_output_format) return fail(report, 'OUTPUT_FORMAT / wiki_candidates missing');
+  if (!report.has_seven_types) return fail(report, 'academic 7-type extraction instruction missing (Slice-9)');
+  if (!report.has_outline_classification) return fail(report, '목차 classification instruction missing (Slice-9)');
   pass(report);
 }
 

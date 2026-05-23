@@ -35,6 +35,7 @@ const INITIAL_DETECT: CodexDetectSnapshot = {
   auth_file_present: false,
   login_probe: 'missing',
   codex_cli_missing: true,
+  origin: 'none',
 };
 
 interface ModeState {

@@ -86,12 +86,23 @@ export function resolveInvoke(): Invoke | null {
   return typeof fn === 'function' ? fn : null;
 }
 
+/**
+ * WHERE codex auth was detected (Slice 9). Mirrors the Rust `CodexOrigin` enum
+ * (snake_case serde). `windows` = the Windows-native probe found codex; `wsl` =
+ * the native probe found nothing and the cross-boundary `wsl.exe -- codex login
+ * status` fallback detected a WSL Ubuntu install; `none` = neither. The proxy
+ * spawn branches on this so a WSL-only install is driven through `wsl.exe`.
+ */
+export type CodexOrigin = 'windows' | 'wsl' | 'none';
+
 /** Shape of the Rust `codex_detect` command. */
 export interface CodexDetectSnapshot {
   available: boolean;
   auth_file_present: boolean;
   login_probe: 'authed' | 'unauthed' | 'missing';
   codex_cli_missing: boolean;
+  /** Where auth was detected (Slice 9). Defaults to 'none' outside Tauri. */
+  origin: CodexOrigin;
 }
 
 /**
@@ -186,12 +197,12 @@ export function openVerificationUrl(url: string | null | undefined): boolean {
 export async function detectCodex(): Promise<CodexDetectSnapshot> {
   const invoke = resolveInvoke();
   if (!invoke) {
-    return { available: false, auth_file_present: false, login_probe: 'missing', codex_cli_missing: true };
+    return { available: false, auth_file_present: false, login_probe: 'missing', codex_cli_missing: true, origin: 'none' };
   }
   try {
     return await invoke<CodexDetectSnapshot>('codex_detect');
   } catch {
-    return { available: false, auth_file_present: false, login_probe: 'missing', codex_cli_missing: true };
+    return { available: false, auth_file_present: false, login_probe: 'missing', codex_cli_missing: true, origin: 'none' };
   }
 }
 

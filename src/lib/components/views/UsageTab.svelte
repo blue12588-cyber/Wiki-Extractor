@@ -122,6 +122,80 @@
     {/each}
   </ol>
 
+  <!-- AC-USAGE-AUTO-SETUP (Slice 9): 자동 모드를 쓰고 싶은 사람을 위한 1회 설정법.
+       기본 복붙(방법 A)과 분리된 별도의 '고급' 섹션이다. 일반인도 따라 할 수 있게
+       PowerShell 명령을 그대로 적어 둔다. codex 설치·로그인은 사용자가 직접 한다
+       (앱은 검출·안내만; 강요하지 않음). -->
+  <section class="auto-setup" aria-labelledby="auto-setup-title">
+    <h3 id="auto-setup-title" class="auto-setup-title">
+      자동 모드 설정법 <span class="auto-setup-tag">고급 · 선택</span>
+    </h3>
+    <p class="auto-setup-lede">
+      위 <strong>방법 A(복사·붙여넣기)</strong>만으로도 모든 기능을 그대로 쓸 수
+      있습니다. 매번 복사·붙여넣기 하기가 번거롭다면, 아래 설정을
+      <strong>한 번만</strong> 해 두면 앱이 알아서 ChatGPT에게 물어보고 결과를
+      받아오는 <strong>자동 모드</strong>를 켤 수 있어요. 내 ChatGPT 계정(무료 또는
+      구독)으로 동작하며, 사용량도 내 계정 기준입니다. 처음 쓰는 분께는 꼭 필요한
+      과정은 아니니, 자동이 필요할 때 시도해 보세요.
+    </p>
+
+    <ol class="auto-steps" role="list">
+      <li class="auto-step">
+        <span class="auto-step-num" aria-hidden="true">1</span>
+        <div class="auto-step-text">
+          <h4 class="auto-step-title">PowerShell(파워셸) 열기</h4>
+          <p class="auto-step-body">
+            윈도우 시작 메뉴에서 <strong>“PowerShell”</strong>을 검색해 엽니다.
+            검은(또는 파란) 명령 입력 창이 뜨면 준비된 거예요.
+          </p>
+        </div>
+      </li>
+      <li class="auto-step">
+        <span class="auto-step-num" aria-hidden="true">2</span>
+        <div class="auto-step-text">
+          <h4 class="auto-step-title">codex(코덱스) 설치하기</h4>
+          <p class="auto-step-body">
+            아래 한 줄을 그대로 입력하고 <kbd>Enter</kbd>를 누르면 설치됩니다.
+            (Node.js가 미리 설치돼 있어야 합니다.)
+          </p>
+          <pre class="auto-cmd"><code>npm i -g &#64;openai/codex</code></pre>
+        </div>
+      </li>
+      <li class="auto-step">
+        <span class="auto-step-num" aria-hidden="true">3</span>
+        <div class="auto-step-text">
+          <h4 class="auto-step-title">내 ChatGPT 계정으로 로그인하기</h4>
+          <p class="auto-step-body">
+            이어서 아래를 입력하고 <kbd>Enter</kbd>를 누릅니다. 웹브라우저가 열리며
+            <strong>ChatGPT 로그인 화면</strong>이 나오면, 평소 쓰던 ChatGPT 계정으로
+            로그인하면 됩니다(무료/구독 계정 모두 가능). 아이디·비밀번호는 이 앱에
+            입력하지 않습니다 — 로그인은 ChatGPT 공식 페이지에서만 이루어집니다.
+          </p>
+          <pre class="auto-cmd"><code>codex login</code></pre>
+        </div>
+      </li>
+      <li class="auto-step">
+        <span class="auto-step-num" aria-hidden="true">4</span>
+        <div class="auto-step-text">
+          <h4 class="auto-step-title">앱에서 자동 모드 켜기</h4>
+          <p class="auto-step-body">
+            한 번 로그인해 두면 이 앱이 자동으로 인식합니다. 앱의 [로그인] 화면에서
+            <strong>[다시 검출]</strong>을 누르면 “자동 모드 사용 가능”으로 바뀌고,
+            [추출 모드]에서 <strong>자동 LLM 모드</strong>를 고를 수 있게 됩니다. 이
+            한 번의 설정 뒤로는 복사·붙여넣기 없이 바로 자동으로 정리돼요.
+          </p>
+        </div>
+      </li>
+    </ol>
+
+    <p class="auto-setup-note" role="note">
+      codex는 자동 모드가 동작하는 동안 백그라운드에서 내 계정 인증을 이어 주는
+      도우미예요. 한 번 설치·로그인해 두면 계속 쓸 수 있고, 컴퓨터에 그대로 두면
+      됩니다. 자동 모드가 잘 안 되거나 설치가 어려우면 언제든
+      <strong>방법 A(복붙)</strong>로 똑같이 모든 기능을 쓸 수 있으니 걱정하지 마세요.
+    </p>
+  </section>
+
   <footer class="outro" role="note">
     막히는 부분이 있으면 [피드백] 화면으로 편하게 알려 주세요. 로그인 없이 보낼 수
     있습니다.
@@ -283,6 +357,131 @@
   .branch-note.muted {
     color: var(--text-secondary);
     opacity: 0.9;
+  }
+
+  /* AC-USAGE-AUTO-SETUP (Slice 9): 고급 자동 모드 설정 섹션. 기본 단계와
+     시각적으로 구분되도록 점선 테두리 + 별도 헤더. 토큰만 사용. */
+  .auto-setup {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    padding: var(--space-lg);
+    border: 1px dashed var(--accent-oxblood);
+    border-radius: var(--radius-asymmetric);
+    background: var(--surface-sunken);
+  }
+
+  .auto-setup-title {
+    margin: 0;
+    font-family: var(--heading-family);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-wrap: wrap;
+  }
+
+  .auto-setup-tag {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    padding: 1px var(--space-sm);
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--accent-oxblood);
+    color: var(--accent-oxblood);
+  }
+
+  .auto-setup-lede {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
+  }
+
+  .auto-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+
+  .auto-step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-md);
+    align-items: start;
+  }
+
+  .auto-step-num {
+    font-family: var(--heading-family);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.4;
+    color: var(--accent-oxblood);
+    width: 1.6em;
+    height: 1.6em;
+    text-align: center;
+    border: 1px solid var(--accent-oxblood);
+    border-radius: var(--radius-pill);
+  }
+
+  .auto-step-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+
+  .auto-step-title {
+    margin: 0;
+    font-family: var(--heading-family);
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .auto-step-body {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
+  .auto-cmd {
+    margin: var(--space-xs) 0 0 0;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--surface-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-soft);
+    overflow-x: auto;
+  }
+  .auto-cmd code {
+    background: transparent;
+    padding: 0;
+    font-size: 0.8125rem;
+    color: var(--text-primary);
+  }
+
+  kbd {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.75em;
+    padding: 0 var(--space-xs);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-tight);
+    background: var(--surface-base);
+  }
+
+  .auto-setup-note {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    padding: var(--space-md);
+    border-left: 3px solid var(--border-subtle);
+    background: var(--surface-elevated);
+    border-radius: var(--radius-tight);
   }
 
   .outro {
