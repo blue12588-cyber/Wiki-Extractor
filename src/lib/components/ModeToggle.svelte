@@ -40,6 +40,18 @@
     void loginWithChatGPT(false);
   }
 
+  // [코드 입력 방식으로 로그인] — 기본(브라우저 자동 열기) 흐름이 막힌 환경
+  // (방화벽·원격·브라우저 자동 실행 불가)을 위한 보조 경로. codex login --device-auth를
+  // spawn해, 브라우저가 자동으로 열리지 않아도 화면에 뜬 주소·코드로 로그인을 마칠 수
+  // 있게 한다(Slice 6 보수 #2). 동일하게 앱은 auth.json을 직접 쓰지 않는다.
+  function loginDevice() {
+    void loginWithChatGPT(true);
+  }
+
+  // 상태 줄(.login-status)의 색 극성: 성공이면 success, 그 외(미완료·실패·미설치)는
+  // attention. 색은 텍스트 메시지를 보조할 뿐, 색에만 의존하지 않는다(Slice 6 보수 #3).
+  let statusKind = $derived(modeStore.loginOutcomeKind ?? 'attention');
+
   // 검출 요약 라벨(한글). 색상에만 의존하지 않도록 텍스트로 상태를 말한다.
   let probeLabel = $derived(
     modeStore.detect.login_probe === 'authed'
@@ -84,10 +96,33 @@
       처리하며, 앱은 인증 파일을 직접 만들거나 고치지 않습니다. 로그인하지 않아도
       복붙 모드로 모든 기능을 그대로 쓸 수 있습니다.
     </span>
+
+    <!-- 보조 경로(Slice 6 보수 #2): 기본(브라우저 자동 열기) 흐름이 막힌 환경을 위한
+         코드 입력 방식. 기본 로그인이 완료되지 못하면 강조해서 보여 준다. -->
+    <div class="device-row" class:emphasized={modeStore.defaultLoginUnfinished}>
+      <button
+        type="button"
+        class="device-btn"
+        onclick={loginDevice}
+        disabled={modeStore.loggingIn}
+        aria-busy={modeStore.loggingIn}
+      >
+        {modeStore.loggingIn ? '진행 중…' : '브라우저가 안 열리면 · 코드 입력 방식으로 로그인'}
+      </button>
+      <span class="device-hint">
+        {#if modeStore.defaultLoginUnfinished}
+          <strong>브라우저가 자동으로 열리지 않았거나 로그인이 끝나지 않았나요?</strong>
+        {/if}
+        방화벽·원격 접속 등으로 브라우저가 자동으로 열리지 않는 환경에서는 이 방식을
+        쓰세요. 화면에 주소와 짧은 코드가 표시되면, 다른 기기·브라우저에서 그 주소로
+        들어가 코드를 입력해 로그인을 마칠 수 있습니다. 이 방식도 아이디·비밀번호를
+        앱에 입력하지 않으며, 앱은 인증 파일을 직접 만들거나 고치지 않습니다.
+      </span>
+    </div>
   </div>
 
   {#if modeStore.loginMessage}
-    <p class="login-status" role="status">{modeStore.loginMessage}</p>
+    <p class="login-status" role="status" data-kind={statusKind}>{modeStore.loginMessage}</p>
   {/if}
 
   {#if modeStore.loginVerification}
@@ -202,16 +237,54 @@
     color: var(--text-secondary);
     line-height: 1.55;
   }
+  /* 보조 경로(코드 입력 방식) 버튼 블록 (Slice 6 보수 #2). 기본 로그인보다 한 단계
+     낮은 시각 위계의 보조 affordance. 토큰만 사용. */
+  .device-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    margin-top: var(--space-xs);
+  }
+  .device-btn {
+    align-self: flex-start;
+    padding: var(--space-xs) var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-soft);
+    background: var(--surface-base);
+    color: var(--text-secondary);
+    font-family: var(--heading-family);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color var(--motion-fast) var(--ease-deliberate);
+  }
+  .device-btn:hover { border-color: var(--accent-oxblood); color: var(--text-primary); }
+  .device-btn:disabled { opacity: 0.6; cursor: progress; }
+  /* 기본 로그인이 완료되지 못한 경우: 보조 경로를 강조(테두리 강세 + 색 진하게). */
+  .device-row.emphasized .device-btn {
+    border-color: var(--accent-oxblood);
+    color: var(--text-primary);
+  }
+  .device-hint {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+  }
+
   .login-status {
     margin: 0;
     font-size: 0.8125rem;
     color: var(--text-primary);
     line-height: 1.5;
     padding: var(--space-sm) var(--space-md);
-    border-left: 3px solid var(--success-moss);
+    border-left: 3px solid var(--border-subtle);
     background: var(--surface-sunken);
     border-radius: var(--radius-tight);
   }
+  /* 색 극성(Slice 6 보수 #3): 성공=success-moss, 그 외(미완료·실패·미설치)=
+     danger-rust. 색은 한글 메시지를 보조할 뿐, 색에만 의존하지 않는다. */
+  .login-status[data-kind='success'] { border-left-color: var(--success-moss); }
+  .login-status[data-kind='attention'] { border-left-color: var(--danger-rust); }
   .login-verify {
     margin: 0;
     font-size: 0.8125rem;

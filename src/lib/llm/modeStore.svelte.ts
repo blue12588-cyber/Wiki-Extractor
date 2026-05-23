@@ -59,6 +59,23 @@ interface ModeState {
    * into auth.json, never surfaced here).
    */
   loginVerification: string | null;
+  /**
+   * Polarity of the last login outcome, for the status rail's visual accent
+   * (Slice 6 repair #3). 'success' iff codex is now authed; 'attention' for any
+   * non-success outcome (not_authed/pending/cli_missing/failed) that still needs
+   * a user action; null before any attempt. The Korean text already disambiguates
+   * — this only keeps the accent COLOR from contradicting the message (color +
+   * text dual-coded; never color-only).
+   */
+  loginOutcomeKind: 'success' | 'attention' | null;
+  /**
+   * True once a default (browser-callback) login attempt has finished WITHOUT
+   * reaching `authed` this session (Slice 6 repair #2). The device-code fallback
+   * affordance is emphasized when this is set — it is the exact case device-auth
+   * exists for (browser cannot open / locked-down environment). The fallback is
+   * still reachable before any attempt too, just less prominent.
+   */
+  defaultLoginUnfinished: boolean;
 }
 
 export const modeStore = $state<ModeState>({
@@ -69,6 +86,8 @@ export const modeStore = $state<ModeState>({
   loggingIn: false,
   loginMessage: null,
   loginVerification: null,
+  loginOutcomeKind: null,
+  defaultLoginUnfinished: false,
 });
 
 /** Re-run codex detection (read-only) and refresh the availability list. */
@@ -119,14 +138,20 @@ export async function loginWithChatGPT(deviceAuth = false): Promise<CodexLoginOu
         applyDetect(outcome.detect);
         modeStore.loginMessage =
           'ChatGPT 로그인이 확인되었습니다. 이제 [추출 모드]에서 자동 LLM 모드를 켤 수 있습니다. (원하지 않으면 복붙 모드를 그대로 쓰셔도 됩니다.)';
+        modeStore.loginOutcomeKind = 'success';
+        // Login finished successfully — the device-code fallback no longer needs
+        // emphasis (and applyDetect already flipped availability).
+        modeStore.defaultLoginUnfinished = false;
         break;
       case 'not_authed':
         applyDetect(outcome.detect);
         modeStore.loginMessage = outcome.message;
+        modeStore.loginOutcomeKind = 'attention';
         break;
       case 'pending':
         modeStore.loginMessage = outcome.message;
         modeStore.loginVerification = outcome.verification;
+        modeStore.loginOutcomeKind = 'attention';
         // A meanwhile-completed flow may already have written auth.json; pick it
         // up with a read-only re-detect (does not block on the codex child).
         await refreshDetect();
@@ -134,7 +159,15 @@ export async function loginWithChatGPT(deviceAuth = false): Promise<CodexLoginOu
       case 'cli_missing':
       case 'failed':
         modeStore.loginMessage = outcome.message;
+        modeStore.loginOutcomeKind = 'attention';
         break;
+    }
+    // Repair #2: a DEFAULT (browser-callback) attempt that did not reach `authed`
+    // marks the device-code fallback as the recommended next step — this is the
+    // browser-cannot-open / firewalled case device-auth exists for. A device-auth
+    // attempt itself does not (re)arm this flag.
+    if (!deviceAuth) {
+      modeStore.defaultLoginUnfinished = outcome.state !== 'authed';
     }
     return outcome;
   } finally {

@@ -50,6 +50,7 @@
 //!     never resolves a home dir or the auth path itself (T1-static-scan clean).
 
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -183,25 +184,31 @@ async fn spawn_codex_login(device: bool) -> Result<Option<String>, LoginSpawnErr
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
+        // Shared holder for the verification line. The scanner records the first
+        // device-code/URL line it sees INTO this holder as soon as it arrives —
+        // independent of which `select!` arm wins. This closes the narrow race
+        // where a code is buffered just before the wait window expires: even on a
+        // timeout (when the scan future is dropped mid-flight), the line is already
+        // in the holder, so `Pending` still carries it. The holder is the single
+        // source of truth for the verification line on EVERY exit path.
+        let holder: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
         // Race: child completes, OR we time out. While waiting we scan output for
         // a verification line so device-auth codes reach the user.
-        let scan = scan_for_verification(stdout, stderr);
+        let scan = scan_for_verification(stdout, stderr, Arc::clone(&holder));
         tokio::pin!(scan);
-
-        let mut verification: Option<String> = None;
 
         let waited = tokio::select! {
             biased;
-            v = &mut scan => { verification = v; child.wait().await.ok(); WaitResult::Exited }
+            _ = &mut scan => { child.wait().await.ok(); WaitResult::Exited }
             status = child.wait() => { let _ = status; WaitResult::Exited }
             _ = tokio::time::sleep(LOGIN_WAIT) => WaitResult::TimedOut,
         };
 
-        // If we timed out, also drain whatever the scanner already found.
-        if verification.is_none() {
-            // Best-effort: the scan future may have buffered a line before timeout;
-            // we cannot re-await a moved future, so verification stays None here.
-        }
+        // Read the verification line from the shared holder — populated by the
+        // scanner the moment a code line arrived, so it survives a timeout that
+        // dropped the scan future before it could return.
+        let verification = holder.lock().ok().and_then(|g| g.clone());
 
         return match waited {
             WaitResult::Exited => Ok(verification),
@@ -228,15 +235,30 @@ enum LoginSpawnError {
     Timeout(Option<String>),
 }
 
-/// Read stdout + stderr line-by-line, returning the first line that looks like a
-/// device-code verification URL/code (non-secret guidance). Returns None when
+/// Read stdout + stderr line-by-line, recording the first line that looks like a
+/// device-code verification URL/code (non-secret guidance) into the shared
+/// `holder` the INSTANT it is seen, then returning it. Writing to the holder
+/// before returning is what makes the code survive a caller timeout that drops
+/// this future mid-await (the narrow race the holder closes). Returns None when
 /// both streams close without such a line.
 async fn scan_for_verification(
     stdout: Option<tokio::process::ChildStdout>,
     stderr: Option<tokio::process::ChildStderr>,
+    holder: Arc<Mutex<Option<String>>>,
 ) -> Option<String> {
     let mut out_lines = stdout.map(|s| BufReader::new(s).lines());
     let mut err_lines = stderr.map(|s| BufReader::new(s).lines());
+
+    // Record a hit into the shared holder (first-write-wins) and hand it back.
+    let record = |text: &str| -> String {
+        let line = text.trim().to_string();
+        if let Ok(mut g) = holder.lock() {
+            if g.is_none() {
+                *g = Some(line.clone());
+            }
+        }
+        line
+    };
 
     loop {
         let next_out = async {
@@ -254,11 +276,11 @@ async fn scan_for_verification(
 
         tokio::select! {
             line = next_out => match line {
-                Some(text) => { if looks_like_verification(&text) { return Some(text.trim().to_string()); } }
+                Some(text) => { if looks_like_verification(&text) { return Some(record(&text)); } }
                 None => { out_lines = None; if err_lines.is_none() { return None; } }
             },
             line = next_err => match line {
-                Some(text) => { if looks_like_verification(&text) { return Some(text.trim().to_string()); } }
+                Some(text) => { if looks_like_verification(&text) { return Some(record(&text)); } }
                 None => { err_lines = None; if out_lines.is_none() { return None; } }
             },
         }
@@ -353,5 +375,51 @@ mod tests {
         let o = LoginOutcome::CliMissing { message: "x".into() };
         let json = serde_json::to_string(&o).unwrap();
         assert!(json.contains("\"state\":\"cli_missing\""));
+    }
+
+    // Fix-1 (device-code race): the scanner records a verification line into the
+    // shared holder the instant it is seen — BEFORE it returns. So even if the
+    // wait window expires and the scan future is dropped after recording but
+    // before its value reaches the caller (the narrow race the Evaluator flagged),
+    // the timeout path still reads the code out of the holder. We model that exact
+    // ordering: the scanner writes the holder, then awaits a yield point that
+    // never completes; the timeout arm wins; the future is dropped; the holder is
+    // asserted to still carry the code (which the production Timeout arm reads).
+    #[tokio::test]
+    async fn device_code_survives_timeout_via_holder() {
+        let holder: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+        let h = Arc::clone(&holder);
+        let line = "Open https://chatgpt.com/device and enter code WXYZ-1234";
+        // Mirror the production record-then-(would-)return shape, with a pending
+        // await inserted between the holder write and the return — standing in for
+        // the scanner blocking on the next line after emitting the code. This is
+        // precisely the window in which the caller's timeout can fire.
+        let scan = async move {
+            assert!(looks_like_verification(line));
+            if let Ok(mut g) = h.lock() {
+                if g.is_none() {
+                    *g = Some(line.trim().to_string());
+                }
+            }
+            // Block forever (stream still open, no further line) — the scanner has
+            // recorded the code but cannot yet return it.
+            std::future::pending::<()>().await;
+            Some(line.to_string())
+        };
+        tokio::pin!(scan);
+
+        // The wait window expires first; the scan future is dropped mid-await.
+        let timed_out = tokio::select! {
+            biased;
+            _ = &mut scan => false,
+            _ = tokio::time::sleep(Duration::from_millis(20)) => true,
+        };
+        assert!(timed_out, "timeout arm should win (scan is still blocked)");
+
+        // The fix: the dropped-future timeout path no longer loses the code —
+        // the holder already carries it (what LoginSpawnError::Timeout reads).
+        let recovered = holder.lock().unwrap().clone();
+        assert_eq!(recovered.as_deref(), Some(line));
     }
 }

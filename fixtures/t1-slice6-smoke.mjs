@@ -31,6 +31,25 @@
  *                       the modeStore loginWithChatGPT action; the store applies
  *                       a returned detect snapshot (AC-LOGIN-STATE-REFRESH).
  *
+ * SLICE-6 REPAIR (Tier-2 — Evaluator non-blocking polish, verified by these):
+ *   device-code-race    codex_login.rs records the verification line into a
+ *                       SHARED holder (Arc<Mutex>) as it arrives, and the timeout
+ *                       path reads the code OUT of that holder — so a device-code
+ *                       seen just before the wait window expires is not dropped
+ *                       (the old dead-branch comment that admitted the loss is
+ *                       gone). [repair #1]
+ *   device-auth-gui     the device-code (--device-auth) flow is reachable from
+ *                       the GUI: ModeToggle exposes a secondary button bound to
+ *                       loginWithChatGPT(true), emphasized when the default flow
+ *                       did not finish; the store tracks defaultLoginUnfinished;
+ *                       UsageTab 방법 B documents the code-input fallback in
+ *                       Korean. [repair #2]
+ *   login-status-polarity  the .login-status rail accent reflects outcome
+ *                       polarity (success vs attention) via data-kind +
+ *                       success-moss/danger-rust — color AGREES with the Korean
+ *                       text rather than always reading success; never
+ *                       color-only (text still disambiguates). [repair #3]
+ *
  * Usage: node --import tsx fixtures/t1-slice6-smoke.mjs <scenario>
  */
 
@@ -270,6 +289,121 @@ async function loginButtonWired() {
   pass(report);
 }
 
+/* --------------------------- SLICE-6 REPAIR (Tier 2) --------------------------- */
+
+// Repair #1 — device-code race: codex_login.rs must record the verification line
+// into a shared holder (Arc<Mutex>) as it arrives, and the timeout path must read
+// it OUT of that holder, so a code buffered just before the wait window closes is
+// carried into the Pending outcome. The old dead branch that admitted the loss
+// ("we cannot re-await a moved future, so verification stays None") must be gone.
+async function deviceCodeRace() {
+  const rust = read('src-tauri/src/codex_login.rs');
+  const report = {
+    scenario: 'device-code-race',
+    has_shared_holder: /Arc<Mutex<Option<String>>>/.test(rust),
+    holder_passed_to_scanner: /scan_for_verification\([^)]*Arc::clone\(&holder\)/.test(rust),
+    scanner_takes_holder: /async fn scan_for_verification\([\s\S]*?holder:\s*Arc<Mutex<Option<String>>>/.test(rust),
+    scanner_writes_holder: /\*g\s*=\s*Some\(/.test(rust),
+    timeout_reads_holder: /holder\.lock\(\)[\s\S]*?\.and_then\(\|g\|\s*g\.clone\(\)\)/.test(rust),
+    timeout_carries_verification: /WaitResult::TimedOut\s*=>\s*Err\(LoginSpawnError::Timeout\(verification\)\)/.test(rust),
+    // The admission-of-loss dead branch must be removed.
+    no_dead_loss_branch: !/verification stays None here/.test(rust),
+    // A regression test for the race must exist in the Rust unit tests.
+    has_race_unit_test: /fn device_code_survives_timeout_via_holder/.test(rust),
+  };
+  if (!report.has_shared_holder) return fail(report, 'no Arc<Mutex<Option<String>>> holder for the verification line');
+  if (!report.holder_passed_to_scanner) return fail(report, 'holder not passed (Arc::clone) into scan_for_verification');
+  if (!report.scanner_takes_holder) return fail(report, 'scan_for_verification does not accept the shared holder');
+  if (!report.scanner_writes_holder) return fail(report, 'scanner does not write the line into the holder as it arrives');
+  if (!report.timeout_reads_holder) return fail(report, 'timeout path does not read the verification line from the holder');
+  if (!report.timeout_carries_verification) return fail(report, 'Timeout outcome does not carry the verification line');
+  if (!report.no_dead_loss_branch) return fail(report, 'the dead branch admitting code loss is still present');
+  if (!report.has_race_unit_test) return fail(report, 'no Rust unit test covering the device-code timeout race');
+  pass(report);
+}
+
+// Repair #2 — device-auth GUI path: the headless device-code variant must be
+// reachable from the GUI (not only wired in the backend). ModeToggle exposes a
+// secondary button bound to loginWithChatGPT(true); the store tracks an
+// unfinished-default flag to emphasize it; UsageTab 방법 B documents the
+// code-input fallback in Korean. The backend still toggles --device-auth.
+async function deviceAuthGui() {
+  const toggle = read('src/lib/components/ModeToggle.svelte');
+  const store = read('src/lib/llm/modeStore.svelte.ts');
+  const usage = read('src/lib/components/views/UsageTab.svelte');
+  const rust = read('src-tauri/src/codex_login.rs');
+  const report = {
+    scenario: 'device-auth-gui',
+    // The default flow is still the hardcoded browser-callback (false) ...
+    default_flow_false: /loginWithChatGPT\(false\)/.test(toggle),
+    // ... and a SEPARATE GUI affordance now requests device-auth (true).
+    device_flow_true: /loginWithChatGPT\(true\)/.test(toggle),
+    device_button_rendered: /class="device-btn"/.test(toggle),
+    device_button_korean: /코드 입력 방식으로 로그인/.test(toggle),
+    device_button_bound: /onclick=\{loginDevice\}/.test(toggle),
+    // Emphasized when the default flow did not complete.
+    store_tracks_unfinished: /defaultLoginUnfinished/.test(store),
+    store_sets_unfinished_on_nonauthed: /if \(!deviceAuth\)\s*\{[\s\S]*?defaultLoginUnfinished\s*=\s*outcome\.state !== 'authed'/.test(store),
+    toggle_emphasizes: /class:emphasized=\{modeStore\.defaultLoginUnfinished\}/.test(toggle),
+    // UsageTab 방법 B documents the code-input fallback (Korean), no jargon.
+    usage_documents_device: /코드 입력 방식으로 로그인/.test(usage) && /방화벽/.test(usage),
+    usage_no_jargon: !/(device-auth|--device-auth|oauth|tauri|invoke)/i.test(usage.replace(/<!--[\s\S]*?-->/g, '')),
+    // Backend still toggles --device-auth from the device_auth bool (unchanged).
+    backend_device_flag: /"--device-auth"/.test(rust) && /device_auth\.unwrap_or\(false\)/.test(rust),
+    korean_guidance: hasKorean(toggle),
+  };
+  if (!report.default_flow_false) return fail(report, 'primary login no longer uses the browser-callback (false) default');
+  if (!report.device_flow_true) return fail(report, 'no GUI path calls loginWithChatGPT(true) (device-auth unreachable)');
+  if (!report.device_button_rendered) return fail(report, 'device-auth secondary button not rendered');
+  if (!report.device_button_korean) return fail(report, 'device-auth button lacks Korean code-input label');
+  if (!report.device_button_bound) return fail(report, 'device-auth button not bound to loginDevice');
+  if (!report.store_tracks_unfinished) return fail(report, 'store does not track defaultLoginUnfinished');
+  if (!report.store_sets_unfinished_on_nonauthed) return fail(report, 'store does not arm the fallback when the default flow does not reach authed');
+  if (!report.toggle_emphasizes) return fail(report, 'device-auth affordance not emphasized when default flow unfinished');
+  if (!report.usage_documents_device) return fail(report, 'UsageTab 방법 B does not document the code-input fallback (방화벽 case)');
+  if (!report.usage_no_jargon) return fail(report, 'UsageTab device-auth guidance leaks internal jargon');
+  if (!report.backend_device_flag) return fail(report, 'backend no longer toggles --device-auth from the device_auth bool');
+  if (!report.korean_guidance) return fail(report, 'device-auth GUI guidance is not Korean');
+  pass(report);
+}
+
+// Repair #3 — login-status polarity: the .login-status rail must reflect outcome
+// polarity (success vs attention) — color AGREES with the Korean text instead of
+// always reading success. Color + text dual-coded (the message still
+// disambiguates; this only fixes the contradicting accent).
+async function loginStatusPolarity() {
+  const toggle = read('src/lib/components/ModeToggle.svelte');
+  const store = read('src/lib/llm/modeStore.svelte.ts');
+  // Isolate the .login-status base rule to assert the fixed success accent is gone.
+  const baseBlock = (() => {
+    const i = toggle.indexOf('.login-status {');
+    if (i < 0) return '';
+    const close = toggle.indexOf('}', i);
+    return toggle.slice(i, close > i ? close + 1 : i + 400);
+  })();
+  const report = {
+    scenario: 'login-status-polarity',
+    status_has_data_kind: /class="login-status"[^>]*data-kind=\{statusKind\}/.test(toggle),
+    derives_status_kind: /statusKind = \$derived\(modeStore\.loginOutcomeKind/.test(toggle),
+    base_not_fixed_success: !/border-left:\s*3px solid var\(--success-moss\)/.test(baseBlock),
+    success_accent_rule: /\.login-status\[data-kind='success'\]\s*\{[^}]*--success-moss/.test(toggle),
+    attention_accent_rule: /\.login-status\[data-kind='attention'\]\s*\{[^}]*--danger-rust/.test(toggle),
+    store_sets_success_on_authed: /case 'authed':[\s\S]*?loginOutcomeKind\s*=\s*'success'/.test(store),
+    store_sets_attention_on_failed: /case 'cli_missing':\s*\n\s*case 'failed':[\s\S]*?loginOutcomeKind\s*=\s*'attention'/.test(store),
+    // dual-coded: the message text is still rendered (color is only a supplement).
+    text_still_shown: /\{modeStore\.loginMessage\}/.test(toggle),
+  };
+  if (!report.status_has_data_kind) return fail(report, '.login-status does not carry a polarity data-kind');
+  if (!report.derives_status_kind) return fail(report, 'statusKind not derived from loginOutcomeKind');
+  if (!report.base_not_fixed_success) return fail(report, '.login-status still hardcodes a success-moss accent regardless of outcome');
+  if (!report.success_accent_rule) return fail(report, 'no success-polarity accent rule (success-moss)');
+  if (!report.attention_accent_rule) return fail(report, 'no attention-polarity accent rule (danger-rust)');
+  if (!report.store_sets_success_on_authed) return fail(report, 'store does not mark success polarity on authed');
+  if (!report.store_sets_attention_on_failed) return fail(report, 'store does not mark attention polarity on failed/cli_missing');
+  if (!report.text_still_shown) return fail(report, 'status message text not shown (color must remain a supplement, not the only signal)');
+  pass(report);
+}
+
 const scenario = process.argv[2];
 const table = {
   // Tier 1
@@ -280,6 +414,10 @@ const table = {
   'usage-content': usageContent,
   'login-no-authwrite': loginNoAuthWrite,
   'login-button-wired': loginButtonWired,
+  // Slice-6 repair (Tier 2)
+  'device-code-race': deviceCodeRace,
+  'device-auth-gui': deviceAuthGui,
+  'login-status-polarity': loginStatusPolarity,
 };
 const fn = table[scenario];
 if (!fn) {
