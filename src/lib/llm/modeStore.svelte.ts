@@ -27,6 +27,7 @@ import {
   type CodexLoginOutcome,
   type ProviderAvailability,
   type ProviderId,
+  type Verification,
 } from './provider';
 
 const INITIAL_DETECT: CodexDetectSnapshot = {
@@ -53,12 +54,21 @@ interface ModeState {
    */
   loginMessage: string | null;
   /**
-   * A device-code verification URL/line, when codex emits one (`--device-auth`
-   * or a build that prints a code). Shown so the user can complete the flow in
-   * the browser. null otherwise. Non-secret (the auth token is written by codex
-   * into auth.json, never surfaced here).
+   * A device-code verification challenge (URL + code), when codex emits one
+   * (`--device-auth`). Shown so the user can complete the flow in the browser:
+   * the renderer displays the code prominently + offers an open-URL / copy-code
+   * affordance (Slice 8 — AC-LOGIN-CODE-UI). null otherwise. NON-SECRET — the
+   * access token is written by codex into auth.json and never surfaced here.
    */
-  loginVerification: string | null;
+  loginVerification: Verification | null;
+  /**
+   * True once a detect-first check (Slice 8 — AC-LOGIN-DETECT-FIRST) found the
+   * machine ALREADY authed and short-circuited the login button: no `codex
+   * login` was spawned and no browser was opened (correct — re-auth is not
+   * needed). The renderer uses this to show the "이미 로그인되어 있습니다" message
+   * without the device-code UI.
+   */
+  alreadyAuthed: boolean;
   /**
    * Polarity of the last login outcome, for the status rail's visual accent
    * (Slice 6 repair #3). 'success' iff codex is now authed; 'attention' for any
@@ -88,6 +98,7 @@ export const modeStore = $state<ModeState>({
   loginVerification: null,
   loginOutcomeKind: null,
   defaultLoginUnfinished: false,
+  alreadyAuthed: false,
 });
 
 /** Re-run codex detection (read-only) and refresh the availability list. */
@@ -111,27 +122,51 @@ function applyDetect(detect: CodexDetectSnapshot): void {
 }
 
 /**
- * Press the ChatGPT-login button (Slice 6 — AC-CODEX-LOGIN-BTN +
- * AC-LOGIN-STATE-REFRESH). Spawns `codex login` (browser OAuth via the Rust
- * command), then refreshes the auth state from the outcome:
+ * Press the ChatGPT-login button (Slice 6 + Slice 8 fix).
  *
- *   - `authed`     → apply the carried detect snapshot (now available) so the
- *                    login tab flips unauthed→authed and the auto-mode radio
- *                    becomes selectable. We do NOT auto-select auto mode (the
- *                    user opts in) — only the AVAILABILITY changes.
+ * Slice-8 DETECT-FIRST (AC-LOGIN-DETECT-FIRST): before spawning anything, run a
+ * READ-ONLY `codex_detect`. If the machine is ALREADY authed, we DO NOT spawn
+ * `codex login` and DO NOT open a browser (re-auth is unnecessary — this is the
+ * exact "I pressed the button and nothing opened" confusion the user hit). We
+ * instead flip availability on, show a friendly "이미 로그인되어 있습니다 · 자동
+ * 모드를 바로 쓸 수 있어요" message, and return an `authed` outcome WITHOUT a
+ * spawn. The auto-mode radio becomes selectable; we do not force-select it.
+ *
+ * When NOT already authed, spawn `codex login` (Slice-8 defaults to the
+ * `--device-auth` device-code flow so a verification URL+code is emitted even on
+ * a piped/no-TTY spawn). The Rust side opens the URL in the browser + parses the
+ * code; we surface it here:
+ *
+ *   - `authed`     → apply the carried detect snapshot (now available).
  *   - `not_authed` → apply the carried snapshot (still unavailable) + message.
- *   - `pending`    → keep current state; show the device-code/URL + a "다시 검출"
- *                    hint. A read-only refresh is run so a meanwhile-completed
- *                    flow is still picked up.
- *   - `cli_missing`/`failed` → message only; copy-paste stays the default.
+ *   - `pending`    → keep current state; show the device-code + URL + a "다시
+ *                    검출" hint (AC-LOGIN-CODE-UI). A read-only refresh is run so
+ *                    a meanwhile-completed flow is still picked up.
+ *   - `cli_missing`/`failed` → message only; copy-paste stays the default
+ *                    (AC-LOGIN-GRACEFUL).
  *
- * The app NEVER writes the auth file — codex does. This action only spawns +
- * re-reads. Never throws; always leaves a Korean `loginMessage`.
+ * The app NEVER writes the auth file — codex does. This action only detects,
+ * spawns, opens a URL, and re-reads. Never throws; always leaves a Korean
+ * `loginMessage`.
  */
-export async function loginWithChatGPT(deviceAuth = false): Promise<CodexLoginOutcome> {
+export async function loginWithChatGPT(deviceAuth = true): Promise<CodexLoginOutcome> {
   modeStore.loggingIn = true;
   modeStore.loginVerification = null;
+  modeStore.alreadyAuthed = false;
   try {
+    // DETECT-FIRST (AC-LOGIN-DETECT-FIRST): already authed → never spawn, never
+    // open a browser; just enable auto mode + reassure the user.
+    const pre = await detectCodex();
+    if (pre.available) {
+      applyDetect(pre);
+      modeStore.loginMessage =
+        '이미 ChatGPT에 로그인되어 있습니다. [추출 모드]에서 자동 LLM 모드를 바로 쓸 수 있어요. (다시 로그인할 필요가 없어 브라우저가 열리지 않은 것이 정상입니다. 원하면 복붙 모드를 그대로 쓰셔도 됩니다.)';
+      modeStore.loginOutcomeKind = 'success';
+      modeStore.defaultLoginUnfinished = false;
+      modeStore.alreadyAuthed = true;
+      return { state: 'authed', detect: pre };
+    }
+
     const outcome = await startCodexLogin(deviceAuth);
     switch (outcome.state) {
       case 'authed':

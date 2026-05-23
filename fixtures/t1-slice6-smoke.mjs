@@ -331,11 +331,14 @@ async function deviceCodeRace() {
   pass(report);
 }
 
-// Repair #2 — device-auth GUI path: the headless device-code variant must be
-// reachable from the GUI (not only wired in the backend). ModeToggle exposes a
-// secondary button bound to loginWithChatGPT(true); the store tracks an
-// unfinished-default flag to emphasize it; UsageTab 방법 B documents the
-// code-input fallback in Korean. The backend still toggles --device-auth.
+// Repair #2 — device-auth GUI path (SUPERSEDED by Slice 8, updated here per the
+// repo's slice-supersedes-slice precedent — cf. stickySidebarCss above): Slice 8
+// makes the device-code (--device-auth) flow the PRIMARY login path so the
+// browser reliably opens on a piped/no-TTY spawn. The primary button now calls
+// loginWithChatGPT(true) (device-auth); a SECONDARY affordance keeps the legacy
+// browser-callback loginWithChatGPT(false) as a fallback. Both calls still exist
+// (device-auth reachable), the emphasis flag + UsageTab fallback guidance remain.
+// The backend now DEFAULTS device_auth to true (unwrap_or(true)).
 async function deviceAuthGui() {
   const toggle = read('src/lib/components/ModeToggle.svelte');
   const store = read('src/lib/llm/modeStore.svelte.ts');
@@ -343,35 +346,36 @@ async function deviceAuthGui() {
   const rust = read('src-tauri/src/codex_login.rs');
   const report = {
     scenario: 'device-auth-gui',
-    // The default flow is still the hardcoded browser-callback (false) ...
-    default_flow_false: /loginWithChatGPT\(false\)/.test(toggle),
-    // ... and a SEPARATE GUI affordance now requests device-auth (true).
-    device_flow_true: /loginWithChatGPT\(true\)/.test(toggle),
+    // Slice 8: the PRIMARY login path is now device-auth (true) ...
+    primary_flow_device_true: /loginWithChatGPT\(true\)/.test(toggle),
+    // ... and the legacy browser-callback (false) is kept as a secondary fallback.
+    fallback_flow_false: /loginWithChatGPT\(false\)/.test(toggle),
     device_button_rendered: /class="device-btn"/.test(toggle),
-    device_button_korean: /코드 입력 방식으로 로그인/.test(toggle),
+    // The secondary button is now the browser-callback fallback (Korean label).
+    fallback_button_korean: /브라우저 자동 열기 방식으로 다시 시도/.test(toggle),
     device_button_bound: /onclick=\{loginDevice\}/.test(toggle),
     // Emphasized when the default flow did not complete.
     store_tracks_unfinished: /defaultLoginUnfinished/.test(store),
     store_sets_unfinished_on_nonauthed: /if \(!deviceAuth\)\s*\{[\s\S]*?defaultLoginUnfinished\s*=\s*outcome\.state !== 'authed'/.test(store),
     toggle_emphasizes: /class:emphasized=\{modeStore\.defaultLoginUnfinished\}/.test(toggle),
-    // UsageTab 방법 B documents the code-input fallback (Korean), no jargon.
-    usage_documents_device: /코드 입력 방식으로 로그인/.test(usage) && /방화벽/.test(usage),
+    // UsageTab 방법 B still documents the firewall fallback (Korean), no jargon.
+    usage_documents_fallback: /방화벽/.test(usage) && /주소 열기/.test(usage),
     usage_no_jargon: !/(device-auth|--device-auth|oauth|tauri|invoke)/i.test(usage.replace(/<!--[\s\S]*?-->/g, '')),
-    // Backend still toggles --device-auth from the device_auth bool (unchanged).
-    backend_device_flag: /"--device-auth"/.test(rust) && /device_auth\.unwrap_or\(false\)/.test(rust),
+    // Backend toggles --device-auth and now DEFAULTS device_auth to true (Slice 8).
+    backend_device_flag: /"--device-auth"/.test(rust) && /device_auth\.unwrap_or\(true\)/.test(rust),
     korean_guidance: hasKorean(toggle),
   };
-  if (!report.default_flow_false) return fail(report, 'primary login no longer uses the browser-callback (false) default');
-  if (!report.device_flow_true) return fail(report, 'no GUI path calls loginWithChatGPT(true) (device-auth unreachable)');
-  if (!report.device_button_rendered) return fail(report, 'device-auth secondary button not rendered');
-  if (!report.device_button_korean) return fail(report, 'device-auth button lacks Korean code-input label');
-  if (!report.device_button_bound) return fail(report, 'device-auth button not bound to loginDevice');
+  if (!report.primary_flow_device_true) return fail(report, 'primary login no longer uses device-auth (true) (Slice-8 browser-open fix lost)');
+  if (!report.fallback_flow_false) return fail(report, 'no GUI path keeps the browser-callback (false) fallback');
+  if (!report.device_button_rendered) return fail(report, 'secondary fallback button not rendered');
+  if (!report.fallback_button_korean) return fail(report, 'fallback button lacks the Korean browser-callback label');
+  if (!report.device_button_bound) return fail(report, 'fallback button not bound to loginDevice');
   if (!report.store_tracks_unfinished) return fail(report, 'store does not track defaultLoginUnfinished');
   if (!report.store_sets_unfinished_on_nonauthed) return fail(report, 'store does not arm the fallback when the default flow does not reach authed');
-  if (!report.toggle_emphasizes) return fail(report, 'device-auth affordance not emphasized when default flow unfinished');
-  if (!report.usage_documents_device) return fail(report, 'UsageTab 방법 B does not document the code-input fallback (방화벽 case)');
+  if (!report.toggle_emphasizes) return fail(report, 'fallback affordance not emphasized when default flow unfinished');
+  if (!report.usage_documents_fallback) return fail(report, 'UsageTab 방법 B does not document the firewall fallback (방화벽 / 주소 열기)');
   if (!report.usage_no_jargon) return fail(report, 'UsageTab device-auth guidance leaks internal jargon');
-  if (!report.backend_device_flag) return fail(report, 'backend no longer toggles --device-auth from the device_auth bool');
+  if (!report.backend_device_flag) return fail(report, 'backend no longer toggles --device-auth defaulting to true (Slice 8)');
   if (!report.korean_guidance) return fail(report, 'device-auth GUI guidance is not Korean');
   pass(report);
 }

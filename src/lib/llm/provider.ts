@@ -95,17 +95,36 @@ export interface CodexDetectSnapshot {
 }
 
 /**
- * Outcome of a `codex login` button press (Slice 6). Mirrors the Rust
- * `LoginOutcome` enum (serde tag `state`). Every variant is non-fatal: the
- * renderer shows the Korean message and the app stays usable in copy-paste mode
- * regardless (AC-GRACEFUL). On `authed`/`not_authed` the refreshed read-only
- * detect snapshot is carried so the login tab can flip state
- * (AC-LOGIN-STATE-REFRESH). The app NEVER writes the auth file — codex does.
+ * A parsed device-code verification challenge (Slice 8). Mirrors the Rust
+ * `Verification` struct. NONE of these fields is a secret: `url` is a public
+ * verification endpoint and `code` is a short single-use pairing code. The real
+ * access token is written by codex into auth.json and never reaches the renderer
+ * (forbidden_side_effects: "access token 출력/표시"). `browser_opened` is true
+ * iff the app already asked the OS to open `url`; the renderer still shows the
+ * URL/code as the fallback. `raw` is the verbatim line for builds we could not
+ * split.
+ */
+export interface Verification {
+  url: string | null;
+  code: string | null;
+  browser_opened: boolean;
+  raw: string;
+}
+
+/**
+ * Outcome of a `codex login` button press (Slice 6, extended Slice 8). Mirrors
+ * the Rust `LoginOutcome` enum (serde tag `state`). Every variant is non-fatal:
+ * the renderer shows the Korean message and the app stays usable in copy-paste
+ * mode regardless (AC-LOGIN-GRACEFUL). On `authed`/`not_authed` the refreshed
+ * read-only detect snapshot is carried so the login tab can flip state
+ * (AC-LOGIN-STATE-REFRESH). On `pending` a structured `Verification` (URL+code)
+ * is carried so the renderer can show the code prominently + open the URL
+ * (AC-LOGIN-CODE-UI). The app NEVER writes the auth file — codex does.
  */
 export type CodexLoginOutcome =
   | { state: 'authed'; detect: CodexDetectSnapshot }
   | { state: 'not_authed'; detect: CodexDetectSnapshot; message: string }
-  | { state: 'pending'; message: string; verification: string | null }
+  | { state: 'pending'; message: string; verification: Verification | null }
   | { state: 'cli_missing'; message: string }
   | { state: 'failed'; message: string };
 
@@ -134,6 +153,28 @@ export async function startCodexLogin(deviceAuth = false): Promise<CodexLoginOut
       message:
         'ChatGPT 로그인을 시작하지 못했습니다. 복붙 모드로 모든 기능을 그대로 쓸 수 있습니다(앱은 계속 동작합니다).',
     };
+  }
+}
+
+/**
+ * Open a verification URL in the system browser from the renderer — the
+ * click-to-open fallback for the "주소 열기" button (AC-LOGIN-CODE-UI). The Rust
+ * side already attempts an OS-delegated open when it parses the URL; this is the
+ * belt-and-braces path for a user clicking the shown URL. OS-delegated only
+ * (`window.open`): no OAuth handling, no credential — just hand the public URL
+ * to the browser. Refuses anything that is not http(s). Never throws; returns
+ * true iff an open was attempted.
+ */
+export function openVerificationUrl(url: string | null | undefined): boolean {
+  if (typeof url !== 'string') return false;
+  const lower = url.toLowerCase();
+  if (!(lower.startsWith('http://') || lower.startsWith('https://'))) return false;
+  if (typeof window === 'undefined' || typeof window.open !== 'function') return false;
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -1,36 +1,39 @@
-//! codex_login — GUI-button-driven `codex login` spawn (Slice 6).
+//! codex_login — GUI-button-driven `codex login` spawn (Slice 6, hardened Slice 8).
 //!
-//! Authority: agreed_contract.json (Slice 6)#AC-CODEX-LOGIN-BTN +
-//!            AC-LOGIN-STATE-REFRESH + AC-GRACEFUL + AC-ENCAPSULATE +
-//!            forbidden_side_effects("앱이 codex auth.json 직접 write/수정").
+//! Authority: agreed_contract.json (Slice 8)#AC-LOGIN-DETECT-FIRST +
+//!            AC-LOGIN-DEVICE-BROWSER + AC-LOGIN-CODE-UI + AC-LOGIN-GRACEFUL +
+//!            forbidden_side_effects("앱이 codex auth.json 직접 write/수정",
+//!            "access token 출력/표시 (device verification code만 표시 OK)").
 //!
 //! # What this module is
 //!
 //! The ACTION half of the codex auth surface. `codex_detect` (Slice 5c) answers
 //! "is codex authed *now*?" read-only; THIS module answers the user pressing the
 //! login button: it **spawns `codex login`** so the user signs in with their
-//! ChatGPT account in the browser. `codex` itself performs the OAuth round trip
-//! and writes `~/.codex/auth.json`. **This module NEVER writes, reads, parses,
-//! or copies the auth file** — it only spawns the CLI and, after the child
-//! finishes (or times out), re-runs the READ-ONLY `codex_detect` so the renderer
-//! can flip the login-tab state from unauthed → authed (AC-LOGIN-STATE-REFRESH).
+//! ChatGPT account. `codex` itself performs the OAuth round trip and writes
+//! `~/.codex/auth.json`. **This module NEVER writes, reads, parses, or copies the
+//! auth file** — it only spawns the CLI and, after the child finishes (or times
+//! out), re-runs the READ-ONLY `codex_detect` so the renderer can flip the
+//! login-tab state from unauthed → authed (AC-LOGIN-STATE-REFRESH).
 //!
-//! # codex login facts (contract `allowed_assumptions`)
+//! # Slice-8 bug fix (browser did not open)
 //!
-//!   - `codex login` = browser ChatGPT OAuth ("Sign in with ChatGPT"). No API
-//!     key. Free / subscription both work. codex opens the system browser and
-//!     starts a localhost callback; the user approves in the browser.
-//!   - `codex login --device-auth` = headless/device-code variant. codex prints
-//!     a verification URL + a short code the user types into the browser. This is
-//!     the fallback for environments where the localhost-callback browser open
-//!     does not work (the contract leaves the final pick to implementation).
+//! Two real failures the user hit, both fixed here + in the frontend:
 //!
-//! This module spawns plain `codex login` (browser-callback flow — the default a
-//! desktop user expects). It additionally CAPTURES the child's stdout/stderr
-//! line-by-line and forwards any verification URL / device-code line it sees to
-//! the renderer as Korean-labelled guidance, so a codex build that falls back to
-//! device-auth still surfaces the code to the user. The login button can be
-//! pressed in `--device-auth` mode explicitly via `device_auth=true`.
+//!   1. **Already-logged-in machine** → the GUI now runs `codex_detect` FIRST
+//!      (frontend, `loginWithChatGPT`) and, when already authed, never spawns
+//!      `codex login` at all — it just tells the user they are logged in and
+//!      enables auto mode. No browser is expected to open (correct), and the
+//!      confusing "nothing happened" silence is gone (AC-LOGIN-DETECT-FIRST).
+//!   2. **Unauthed user, piped stdio** → plain `codex login` relies on codex
+//!      auto-opening the system browser, which a piped/no-TTY spawn cannot always
+//!      do. So the login spawn now DEFAULTS to **`codex login --device-auth`**:
+//!      codex prints a verification URL + a short code regardless of TTY. We
+//!      PARSE the URL and the `XXXX-XXXX` code out of the output, **open the URL
+//!      in the system browser from the app itself** (OS-delegated `start`/
+//!      `xdg-open`/`open` — never an OAuth round trip, codex still owns auth), and
+//!      surface the code to the renderer so the user types it in
+//!      (AC-LOGIN-DEVICE-BROWSER + AC-LOGIN-CODE-UI).
 //!
 //! # Hard boundaries (contract-mandated)
 //!
@@ -39,13 +42,19 @@
 //!     app's tree, performed by the codex binary, not by us. We never open the
 //!     path. The post-login re-detect is the read-only `auth_file_present` stat
 //!     (delegated to `external_dep_paths`, the SOLE AC-7-relaxed module).
+//!   - **Only the device verification code/URL is surfaced — never an access
+//!     token.** The token is written by codex into auth.json and never appears on
+//!     stdout, so it never reaches this code path. The verification code is a
+//!     short, single-use pairing code (NOT a secret), safe to display.
+//!   - **Browser open is OS-delegated.** We hand the verification URL to the OS
+//!     default handler (`cmd /C start`, `xdg-open`, `open`); the app does not
+//!     embed a browser, parse OAuth callbacks, or touch any credential. This is
+//!     the contract-permitted "OS 위임" path.
 //!   - **No forced install.** codex binary not found ⇒ a Korean guidance result;
-//!     the default mode stays copy-paste (offline). codex is opt-in for advanced
-//!     users (constraints: "codex 강요 0").
-//!   - **Bounded + graceful.** The spawn has a generous but finite wait for the
-//!     interactive OAuth; on timeout we report a graceful "still pending /
-//!     check again" result (never block the app, never panic). A real OAuth
-//!     failure is graceful degradation to copy-paste, NOT a crash.
+//!     the default mode stays copy-paste (offline). codex is opt-in.
+//!   - **Bounded + graceful.** The spawn has a generous but finite wait; on
+//!     timeout we report a graceful "still pending / check again" result with any
+//!     code we captured (never block the app, never panic).
 //!   - **Zero forbidden OS-user-dir tokens.** Like `codex_detect`, this module
 //!     never resolves a home dir or the auth path itself (T1-static-scan clean).
 
@@ -59,9 +68,28 @@ use tokio::process::Command;
 
 use crate::codex_detect::{detect_codex, CodexDetect};
 
+/// A parsed device-code verification challenge, surfaced to the renderer so the
+/// user can finish the login in a browser. NONE of these fields is a secret: the
+/// URL is a public verification endpoint and the code is a short single-use
+/// pairing code. The actual access token is written by codex into auth.json and
+/// never appears on this path. `raw` keeps the original line for the rare build
+/// whose layout we could not split, so the user still sees the guidance verbatim.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Verification {
+    /// The verification URL to open in a browser (parsed out of the line), if found.
+    pub url: Option<String>,
+    /// The short pairing code (e.g. `WXYZ-1234`) the user types in the browser.
+    pub code: Option<String>,
+    /// True iff the app successfully asked the OS to open `url` in the default
+    /// browser. The renderer still shows the URL/code as a fallback regardless.
+    pub browser_opened: bool,
+    /// The original (trimmed) output line, as a verbatim fallback.
+    pub raw: String,
+}
+
 /// Outcome of a `codex login` button press, surfaced to the renderer. Every
 /// variant is non-fatal: the renderer shows a Korean message and the app stays
-/// usable in copy-paste mode regardless (AC-GRACEFUL).
+/// usable in copy-paste mode regardless (AC-LOGIN-GRACEFUL).
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum LoginOutcome {
@@ -72,12 +100,13 @@ pub enum LoginOutcome {
     /// the user likely cancelled the browser approval. Graceful; copy-paste
     /// stays available. Carries the detect snapshot + a Korean message.
     NotAuthed { detect: CodexDetect, message: String },
-    /// The interactive login did not complete within the wait window. The codex
-    /// child may still be waiting on the browser; we surface a Korean "다시 검출"
-    /// hint without killing anything destructive. Carries any device-code line.
+    /// The device-code flow emitted a verification challenge (URL + code) and is
+    /// waiting for the user to approve in the browser. We surface a Korean "다시
+    /// 검출" hint together with the structured `verification` so the renderer can
+    /// show the code prominently and offer an open-URL / copy-code affordance.
     Pending {
         message: String,
-        verification: Option<String>,
+        verification: Option<Verification>,
     },
     /// codex CLI not installed (the common-person case) — Korean guidance only,
     /// copy-paste stays the default. NEVER a forced install.
@@ -95,10 +124,11 @@ pub enum LoginOutcome {
     Failed { message: String },
 }
 
-/// Interactive-login wait window. Browser OAuth is human-paced, so this is
-/// generous — but still finite so a wedged flow cannot hang the app. On expiry
-/// we return `Pending` (not a kill): the codex child is left to finish in the
-/// background; the user re-checks with the existing "다시 검출" button.
+/// Interactive-login wait window. The device-code flow is human-paced (the user
+/// opens a browser, signs in, types the code), so this is generous — but still
+/// finite so a wedged flow cannot hang the app. On expiry we return `Pending`
+/// (not a kill): the codex child is left to finish in the background; the user
+/// re-checks with the existing "다시 검출" button.
 const LOGIN_WAIT: Duration = Duration::from_secs(150);
 
 /// Candidate codex binary names by platform (mirror of codex_detect). On Windows
@@ -118,12 +148,108 @@ fn codex_binaries() -> &'static [&'static str] {
 /// printed on this path).
 fn looks_like_verification(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
-    (l.contains("http://") || l.contains("https://"))
+    let has_url = l.contains("http://") || l.contains("https://");
+    let has_code = parse_device_code(line).is_some();
+    (has_url
         && (l.contains("device")
             || l.contains("verify")
             || l.contains("code")
             || l.contains("activate")
-            || l.contains("login"))
+            || l.contains("login")))
+        || has_code
+}
+
+/// Extract the first http(s) URL token from a line, trimmed of trailing
+/// punctuation. Pure string scan — no network, no parsing of the page.
+fn parse_url(line: &str) -> Option<String> {
+    for raw_tok in line.split_whitespace() {
+        let lower = raw_tok.to_ascii_lowercase();
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            // Trim common trailing punctuation that hugs a URL in prose.
+            let trimmed = raw_tok.trim_end_matches(|c| matches!(c, '.' | ',' | ')' | ']' | '>' | '"' | '\''));
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+/// Extract a short device-pairing code of the canonical `XXXX-XXXX` shape
+/// (letters/digits, one hyphen, 4–8 chars per group). codex's device-auth flow
+/// prints exactly this. We require the hyphenated two-group form so we never
+/// mistake an arbitrary word for the code. Returned uppercased (display norm).
+fn parse_device_code(line: &str) -> Option<String> {
+    for raw_tok in line.split(|c: char| c.is_whitespace() || matches!(c, ':' | '"' | '\'' | '(' | ')' | '[' | ']')) {
+        let tok = raw_tok.trim();
+        if let Some((a, b)) = tok.split_once('-') {
+            let group_ok = |g: &str| {
+                let len = g.chars().count();
+                (4..=8).contains(&len) && g.chars().all(|c| c.is_ascii_alphanumeric())
+            };
+            // Exactly one hyphen (b must not contain another), both groups valid.
+            if !b.contains('-') && group_ok(a) && group_ok(b) {
+                return Some(tok.to_ascii_uppercase());
+            }
+        }
+    }
+    None
+}
+
+/// Ask the OS to open `url` in the user's default browser. OS-delegated only:
+/// on Windows `cmd /C start "" <url>`, on macOS `open`, otherwise `xdg-open`.
+/// This is NOT an OAuth round trip and touches NO credential — it hands a public
+/// verification URL to the system handler (the contract-permitted "OS 위임"
+/// path). Returns true iff the open command spawned without error. Never panics;
+/// a failure simply means the renderer's shown URL/code is the fallback.
+fn open_in_browser(url: &str) -> bool {
+    // Defensive: only open well-formed http(s) URLs we parsed ourselves.
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return false;
+    }
+    let result = if cfg!(target_os = "windows") {
+        // `start` is a cmd builtin; the empty "" is the (ignored) window title so
+        // a URL beginning with a quote is not consumed as the title.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    } else {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    };
+    result.is_ok()
+}
+
+/// Build a `Verification` from a captured output line: split URL + code, then
+/// (if a URL was found) ask the OS to open it. Pure-ish: the only side effect is
+/// the OS-delegated browser open, which carries no credential.
+fn build_verification(raw_line: &str) -> Verification {
+    let raw = raw_line.trim().to_string();
+    let url = parse_url(&raw);
+    let code = parse_device_code(&raw);
+    let browser_opened = match url.as_deref() {
+        Some(u) => open_in_browser(u),
+        None => false,
+    };
+    Verification {
+        url,
+        code,
+        browser_opened,
+        raw,
+    }
 }
 
 /// Build the `codex login` command for the current platform. On Windows the
@@ -287,9 +413,11 @@ async fn scan_for_verification(
     }
 }
 
-/// Core login driver: spawn `codex login` (browser OAuth, or device-auth when
-/// `device`), wait bounded, then re-run the READ-ONLY detect. Maps every result
-/// to a non-fatal `LoginOutcome` (AC-GRACEFUL). Never writes the auth file.
+/// Core login driver: spawn `codex login --device-auth` (when `device`), wait
+/// bounded, then re-run the READ-ONLY detect. Maps every result to a non-fatal
+/// `LoginOutcome` (AC-LOGIN-GRACEFUL). Never writes the auth file. When a
+/// verification line is captured, the URL is opened in the browser by the app
+/// (AC-LOGIN-DEVICE-BROWSER) and the code is surfaced to the UI (AC-LOGIN-CODE-UI).
 pub async fn run_codex_login(device: bool) -> LoginOutcome {
     match spawn_codex_login(device).await {
         Ok(verification) => {
@@ -298,12 +426,13 @@ pub async fn run_codex_login(device: bool) -> LoginOutcome {
             let detect = detect_codex();
             if detect.available {
                 LoginOutcome::Authed { detect }
-            } else if let Some(v) = verification {
+            } else if let Some(line) = verification {
                 // codex emitted a device-code line and exited before the user
-                // finished in the browser — surface the code, stay graceful.
+                // finished in the browser — split URL+code, open the browser, and
+                // surface the code. Stay graceful.
                 LoginOutcome::Pending {
-                    message: "ChatGPT 로그인 확인 코드가 발급되었습니다. 브라우저에서 코드를 입력해 로그인을 마친 뒤 [다시 검출]을 눌러 주세요. 로그인하지 않아도 복붙 모드로 모든 기능을 쓸 수 있습니다.".to_string(),
-                    verification: Some(v),
+                    message: "ChatGPT 로그인 확인 코드가 발급되었습니다. 아래 코드를 브라우저(자동으로 열립니다)에서 입력해 로그인을 마친 뒤 [다시 검출]을 눌러 주세요. 로그인하지 않아도 복붙 모드로 모든 기능을 쓸 수 있습니다.".to_string(),
+                    verification: Some(build_verification(&line)),
                 }
             } else {
                 LoginOutcome::NotAuthed {
@@ -323,20 +452,27 @@ pub async fn run_codex_login(device: bool) -> LoginOutcome {
             }
         }
         Err(LoginSpawnError::Timeout(verification)) => LoginOutcome::Pending {
-            message: "ChatGPT 로그인 창이 아직 진행 중입니다. 브라우저에서 로그인을 마친 뒤 [다시 검출]을 눌러 상태를 새로고침해 주세요. 로그인하지 않아도 복붙 모드로 모든 기능을 쓸 수 있습니다.".to_string(),
-            verification,
+            message: "ChatGPT 로그인이 아직 진행 중입니다. 브라우저(자동으로 열립니다)에서 아래 코드를 입력해 로그인을 마친 뒤 [다시 검출]을 눌러 상태를 새로고침해 주세요. 로그인하지 않아도 복붙 모드로 모든 기능을 쓸 수 있습니다.".to_string(),
+            verification: verification.as_deref().map(build_verification),
         },
     }
 }
 
-/// Tauri command: start `codex login` (browser ChatGPT OAuth) and report the
-/// outcome. `device_auth=true` requests the headless device-code variant.
-/// Returns a `LoginOutcome` (never a command error) so the renderer always gets
-/// a status object and degrades to copy-paste gracefully (AC-GRACEFUL).
-/// The app NEVER writes the auth file — codex does, under `~/.codex`.
+/// Tauri command: start `codex login` and report the outcome. The login button
+/// DEFAULTS to the device-code variant (`--device-auth`): it prints a
+/// verification URL + code regardless of TTY, which the app then opens in the
+/// browser + surfaces — this is the Slice-8 fix for the "browser did not open"
+/// bug on piped/no-TTY spawns. Passing `device_auth=false` explicitly requests
+/// the older browser-callback flow (kept for completeness). Returns a
+/// `LoginOutcome` (never a command error) so the renderer always gets a status
+/// object and degrades to copy-paste gracefully (AC-LOGIN-GRACEFUL). The app
+/// NEVER writes the auth file — codex does, under `~/.codex`.
 #[tauri::command]
 pub async fn codex_login_start(device_auth: Option<bool>) -> LoginOutcome {
-    run_codex_login(device_auth.unwrap_or(false)).await
+    // Slice-8: default to device-auth (TTY-independent URL+code) so the browser
+    // reliably opens. The legacy browser-callback flow remains reachable via an
+    // explicit `device_auth=false`.
+    run_codex_login(device_auth.unwrap_or(true)).await
 }
 
 #[cfg(test)]
@@ -357,8 +493,62 @@ mod tests {
     fn verification_line_detector_rejects_plain_log() {
         assert!(!looks_like_verification("Starting codex login flow..."));
         assert!(!looks_like_verification("waiting for browser approval"));
-        // A bare URL without a login/device/code hint is not surfaced.
+        // A bare URL without a login/device/code hint AND no XXXX-XXXX code is
+        // not surfaced.
         assert!(!looks_like_verification("see https://example.com/docs"));
+    }
+
+    #[test]
+    fn parse_url_extracts_and_trims() {
+        assert_eq!(
+            parse_url("Open https://chatgpt.com/device and enter code").as_deref(),
+            Some("https://chatgpt.com/device")
+        );
+        // Trailing punctuation hugging the URL is trimmed.
+        assert_eq!(
+            parse_url("visit https://auth.openai.com/activate.").as_deref(),
+            Some("https://auth.openai.com/activate")
+        );
+        assert_eq!(parse_url("no url here"), None);
+    }
+
+    #[test]
+    fn parse_device_code_accepts_xxxx_xxxx() {
+        assert_eq!(
+            parse_device_code("enter code WXYZ-1234 in the browser").as_deref(),
+            Some("WXYZ-1234")
+        );
+        // Lowercase is normalized to uppercase for display.
+        assert_eq!(parse_device_code("code: abcd-5678").as_deref(), Some("ABCD-5678"));
+    }
+
+    #[test]
+    fn parse_device_code_rejects_non_code() {
+        // A normal hyphenated word is not a code (groups too long / not 4-8).
+        assert_eq!(parse_device_code("sign-in to continue"), None);
+        // A bare URL is not a code.
+        assert_eq!(parse_device_code("https://chatgpt.com/device"), None);
+        // Three groups (two hyphens) is not the canonical two-group code.
+        assert_eq!(parse_device_code("ABCD-1234-EFGH"), None);
+    }
+
+    #[test]
+    fn build_verification_splits_url_and_code() {
+        // build_verification calls open_in_browser, which only SPAWNS an OS open
+        // command (best-effort) — it never blocks and never touches a credential.
+        // We assert the parse split here; browser_opened is environment-dependent.
+        let v = build_verification("Open https://chatgpt.com/device and enter code WXYZ-1234");
+        assert_eq!(v.url.as_deref(), Some("https://chatgpt.com/device"));
+        assert_eq!(v.code.as_deref(), Some("WXYZ-1234"));
+        assert!(v.raw.contains("WXYZ-1234"));
+    }
+
+    #[test]
+    fn open_in_browser_rejects_non_http() {
+        // Defensive: never hand a non-http(s) string to the OS opener.
+        assert!(!open_in_browser("file:///etc/passwd"));
+        assert!(!open_in_browser("not a url"));
+        assert!(!open_in_browser(""));
     }
 
     #[test]
@@ -377,24 +567,35 @@ mod tests {
         assert!(json.contains("\"state\":\"cli_missing\""));
     }
 
-    // Fix-1 (device-code race): the scanner records a verification line into the
-    // shared holder the instant it is seen — BEFORE it returns. So even if the
-    // wait window expires and the scan future is dropped after recording but
-    // before its value reaches the caller (the narrow race the Evaluator flagged),
-    // the timeout path still reads the code out of the holder. We model that exact
-    // ordering: the scanner writes the holder, then awaits a yield point that
-    // never completes; the timeout arm wins; the future is dropped; the holder is
-    // asserted to still carry the code (which the production Timeout arm reads).
+    #[test]
+    fn verification_serializes_code_and_url() {
+        let o = LoginOutcome::Pending {
+            message: "m".into(),
+            verification: Some(Verification {
+                url: Some("https://chatgpt.com/device".into()),
+                code: Some("WXYZ-1234".into()),
+                browser_opened: true,
+                raw: "Open https://chatgpt.com/device code WXYZ-1234".into(),
+            }),
+        };
+        let json = serde_json::to_string(&o).unwrap();
+        assert!(json.contains("\"state\":\"pending\""));
+        assert!(json.contains("WXYZ-1234"));
+        assert!(json.contains("\"browser_opened\":true"));
+        // The access token never appears on this path — only the public code/URL.
+    }
+
+    // Fix (device-code race, carried from Slice 6): the scanner records a
+    // verification line into the shared holder the instant it is seen — BEFORE it
+    // returns. So even if the wait window expires and the scan future is dropped
+    // after recording but before its value reaches the caller, the timeout path
+    // still reads the code out of the holder. We model that exact ordering.
     #[tokio::test]
     async fn device_code_survives_timeout_via_holder() {
         let holder: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let h = Arc::clone(&holder);
         let line = "Open https://chatgpt.com/device and enter code WXYZ-1234";
-        // Mirror the production record-then-(would-)return shape, with a pending
-        // await inserted between the holder write and the return — standing in for
-        // the scanner blocking on the next line after emitting the code. This is
-        // precisely the window in which the caller's timeout can fire.
         let scan = async move {
             assert!(looks_like_verification(line));
             if let Ok(mut g) = h.lock() {
@@ -402,14 +603,11 @@ mod tests {
                     *g = Some(line.trim().to_string());
                 }
             }
-            // Block forever (stream still open, no further line) — the scanner has
-            // recorded the code but cannot yet return it.
             std::future::pending::<()>().await;
             Some(line.to_string())
         };
         tokio::pin!(scan);
 
-        // The wait window expires first; the scan future is dropped mid-await.
         let timed_out = tokio::select! {
             biased;
             _ = &mut scan => false,
@@ -417,8 +615,6 @@ mod tests {
         };
         assert!(timed_out, "timeout arm should win (scan is still blocked)");
 
-        // The fix: the dropped-future timeout path no longer loses the code —
-        // the holder already carries it (what LoginSpawnError::Timeout reads).
         let recovered = holder.lock().unwrap().clone();
         assert_eq!(recovered.as_deref(), Some(line));
     }

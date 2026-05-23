@@ -23,7 +23,7 @@
     selectProvider,
     loginWithChatGPT,
   } from '$lib/llm/modeStore.svelte';
-  import type { ProviderId } from '$lib/llm/provider';
+  import { openVerificationUrl, type ProviderId } from '$lib/llm/provider';
 
   onMount(() => {
     // 읽기 전용 codex 검출 1회 + 가벼운 폴링은 하지 않는다(명시적 새로고침 버튼 제공).
@@ -34,18 +34,40 @@
     selectProvider(id);
   }
 
-  // [ChatGPT로 로그인] — 앱이 codex login을 spawn(브라우저 OAuth). 앱은 auth.json을
-  // 직접 쓰지 않는다(codex가 ~/.codex에 기록). 끝나면 read-only 재검출로 상태 갱신.
+  // [ChatGPT로 로그인] (Slice 8) — 먼저 read-only 검출 후, 이미 로그인돼 있으면
+  // codex login을 spawn하지 않고 자동 모드만 켠다(브라우저 안 열림 = 정상,
+  // AC-LOGIN-DETECT-FIRST). 미인증이면 codex login --device-auth를 spawn해 화면에
+  // 뜬 주소를 앱이 직접 브라우저로 열고(AC-LOGIN-DEVICE-BROWSER) 코드를 크게
+  // 보여 준다(AC-LOGIN-CODE-UI). 앱은 auth.json을 직접 쓰지 않는다(codex가 기록).
   function login() {
+    void loginWithChatGPT(true);
+  }
+
+  // [브라우저 자동 열기 방식으로 다시 시도] — 코드 입력 방식이 막힌 드문 환경을 위한
+  // 보조 경로(legacy 브라우저 콜백 흐름, codex login). 기본(코드 입력) 흐름이 끝나지
+  // 않으면 강조해서 보여 준다. 동일하게 앱은 auth.json을 직접 쓰지 않는다.
+  function loginDevice() {
     void loginWithChatGPT(false);
   }
 
-  // [코드 입력 방식으로 로그인] — 기본(브라우저 자동 열기) 흐름이 막힌 환경
-  // (방화벽·원격·브라우저 자동 실행 불가)을 위한 보조 경로. codex login --device-auth를
-  // spawn해, 브라우저가 자동으로 열리지 않아도 화면에 뜬 주소·코드로 로그인을 마칠 수
-  // 있게 한다(Slice 6 보수 #2). 동일하게 앱은 auth.json을 직접 쓰지 않는다.
-  function loginDevice() {
-    void loginWithChatGPT(true);
+  // [주소 열기] — 표시된 verification URL을 시스템 브라우저로 연다(OS 위임, window.open).
+  // Rust가 이미 한 번 열지만, 사용자가 직접 다시 열 수 있는 보조 affordance.
+  function openUrl() {
+    openVerificationUrl(modeStore.loginVerification?.url ?? null);
+  }
+
+  // [코드 복사] — verification 코드(비밀 아님)를 클립보드로 복사한다.
+  let codeCopied = $state(false);
+  async function copyCode() {
+    const code = modeStore.loginVerification?.code;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      codeCopied = true;
+      setTimeout(() => (codeCopied = false), 2000);
+    } catch {
+      codeCopied = false;
+    }
   }
 
   // 상태 줄(.login-status)의 색 극성: 성공이면 success, 그 외(미완료·실패·미설치)는
@@ -88,17 +110,20 @@
           <path d="M8.2 8.2 L13 13 M11 11 L13 9.5 M12 12 L13.5 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </span>
-      <span>{modeStore.loggingIn ? '로그인 진행 중… (브라우저를 확인하세요)' : 'ChatGPT로 로그인'}</span>
+      <span>{modeStore.loggingIn ? '로그인 확인 중…' : 'ChatGPT로 로그인'}</span>
     </button>
     <span class="login-hint">
-      버튼을 누르면 앱이 codex 로그인을 실행해 브라우저에서 ChatGPT 계정으로
-      로그인합니다(아이디·비밀번호는 앱에 입력하지 않습니다). 로그인은 codex가
-      처리하며, 앱은 인증 파일을 직접 만들거나 고치지 않습니다. 로그인하지 않아도
-      복붙 모드로 모든 기능을 그대로 쓸 수 있습니다.
+      버튼을 누르면 앱이 먼저 로그인 상태를 확인합니다. <strong>이미 로그인돼
+      있으면</strong> 다시 로그인할 필요가 없어 브라우저가 열리지 않고 곧바로 자동
+      모드를 쓸 수 있습니다(정상입니다). <strong>아직 로그인 전이면</strong> 화면에
+      뜬 주소를 앱이 자동으로 브라우저에서 열고, 짧은 코드를 보여 줍니다. 그 코드를
+      브라우저에 입력해 ChatGPT 계정으로 로그인하면 됩니다(아이디·비밀번호는 앱에
+      입력하지 않습니다). 로그인은 codex가 처리하며, 앱은 인증 파일을 직접 만들거나
+      고치지 않습니다. 로그인하지 않아도 복붙 모드로 모든 기능을 그대로 쓸 수 있습니다.
     </span>
 
-    <!-- 보조 경로(Slice 6 보수 #2): 기본(브라우저 자동 열기) 흐름이 막힌 환경을 위한
-         코드 입력 방식. 기본 로그인이 완료되지 못하면 강조해서 보여 준다. -->
+    <!-- 보조 경로: 코드 입력 방식이 막힌 드문 환경을 위한 브라우저 콜백(legacy) 흐름.
+         기본(코드 입력) 흐름이 완료되지 못하면 강조해서 보여 준다. -->
     <div class="device-row" class:emphasized={modeStore.defaultLoginUnfinished}>
       <button
         type="button"
@@ -107,16 +132,16 @@
         disabled={modeStore.loggingIn}
         aria-busy={modeStore.loggingIn}
       >
-        {modeStore.loggingIn ? '진행 중…' : '브라우저가 안 열리면 · 코드 입력 방식으로 로그인'}
+        {modeStore.loggingIn ? '진행 중…' : '코드가 안 보이면 · 브라우저 자동 열기 방식으로 다시 시도'}
       </button>
       <span class="device-hint">
         {#if modeStore.defaultLoginUnfinished}
-          <strong>브라우저가 자동으로 열리지 않았거나 로그인이 끝나지 않았나요?</strong>
+          <strong>코드가 표시되지 않았거나 로그인이 끝나지 않았나요?</strong>
         {/if}
-        방화벽·원격 접속 등으로 브라우저가 자동으로 열리지 않는 환경에서는 이 방식을
-        쓰세요. 화면에 주소와 짧은 코드가 표시되면, 다른 기기·브라우저에서 그 주소로
-        들어가 코드를 입력해 로그인을 마칠 수 있습니다. 이 방식도 아이디·비밀번호를
-        앱에 입력하지 않으며, 앱은 인증 파일을 직접 만들거나 고치지 않습니다.
+        대부분은 위 [ChatGPT로 로그인]만으로 충분합니다. 코드 입력 방식이 동작하지
+        않는 드문 환경에서는 이 방식을 쓰세요. codex가 브라우저를 직접 열어 로그인을
+        진행합니다. 이 방식도 아이디·비밀번호를 앱에 입력하지 않으며, 앱은 인증 파일을
+        직접 만들거나 고치지 않습니다.
       </span>
     </div>
   </div>
@@ -125,11 +150,52 @@
     <p class="login-status" role="status" data-kind={statusKind}>{modeStore.loginMessage}</p>
   {/if}
 
+  <!-- device-code 코드/URL UI (Slice 8 · AC-LOGIN-CODE-UI): 코드를 크게 표시 +
+       복사 버튼 + 주소 열기 버튼 + 로그인 완료 후 [다시 검출] 안내. 표시되는 것은
+       비밀이 아닌 verification 코드/URL뿐이며 access token은 표시하지 않는다. -->
   {#if modeStore.loginVerification}
-    <p class="login-verify" role="note">
-      브라우저에서 아래 주소/코드로 로그인을 마쳐 주세요:
-      <code class="verify-code">{modeStore.loginVerification}</code>
-    </p>
+    {@const v = modeStore.loginVerification}
+    <div class="login-verify" role="note" aria-label="ChatGPT 로그인 확인 코드">
+      <p class="verify-lede">
+        브라우저에서 아래 <strong>코드</strong>를 입력해 로그인을 마쳐 주세요.
+        {#if v.browser_opened}
+          (로그인 페이지를 자동으로 열었습니다. 열리지 않았다면 아래 [주소 열기]를 눌러 주세요.)
+        {:else}
+          (아래 [주소 열기]를 눌러 로그인 페이지를 여세요.)
+        {/if}
+      </p>
+
+      {#if v.code}
+        <div class="verify-code-row">
+          <span class="verify-code-label">확인 코드</span>
+          <code class="verify-code-big">{v.code}</code>
+          <button type="button" class="verify-action" onclick={copyCode}>
+            {codeCopied ? '복사됨 ✓' : '코드 복사'}
+          </button>
+        </div>
+      {/if}
+
+      {#if v.url}
+        <div class="verify-url-row">
+          <span class="verify-url-label">로그인 주소</span>
+          <code class="verify-url">{v.url}</code>
+          <button type="button" class="verify-action" onclick={openUrl}>주소 열기</button>
+        </div>
+      {/if}
+
+      {#if !v.code && !v.url}
+        <!-- 드물게 주소·코드를 분리하지 못한 경우: 원문 줄을 그대로 보여 준다. -->
+        <p class="verify-raw">화면 안내: <code class="verify-code">{v.raw}</code></p>
+      {/if}
+
+      <p class="verify-after">
+        로그인을 마친 뒤
+        <button type="button" class="link-btn" onclick={() => refreshDetect()} disabled={modeStore.refreshing}>
+          {modeStore.refreshing ? '검출 중…' : '다시 검출'}
+        </button>
+        을 눌러 상태를 새로고침해 주세요.
+      </p>
+    </div>
   {/if}
 
   <fieldset class="modes">
@@ -285,7 +351,71 @@
      danger-rust. 색은 한글 메시지를 보조할 뿐, 색에만 의존하지 않는다. */
   .login-status[data-kind='success'] { border-left-color: var(--success-moss); }
   .login-status[data-kind='attention'] { border-left-color: var(--danger-rust); }
+  /* device-code 코드/URL UI (Slice 8). 토큰만 사용. 코드는 크고 또렷하게. */
   .login-verify {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: var(--space-md);
+    border: 1px solid var(--accent-oxblood);
+    border-radius: var(--radius-soft);
+    background: var(--surface-sunken);
+  }
+  .verify-lede {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-primary);
+    line-height: 1.55;
+  }
+  .verify-code-row,
+  .verify-url-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-wrap: wrap;
+  }
+  .verify-code-label,
+  .verify-url-label {
+    font-family: var(--heading-family);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+  .verify-code-big {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--accent-oxblood);
+    background: var(--surface-base);
+    padding: var(--space-xs) var(--space-md);
+    border-radius: var(--radius-tight);
+    border: 1px solid var(--border-subtle);
+    user-select: all;
+  }
+  .verify-url {
+    font-size: 0.8125rem;
+    word-break: break-all;
+    color: var(--text-secondary);
+    background: var(--surface-base);
+    padding: 1px var(--space-sm);
+    border-radius: var(--radius-tight);
+  }
+  .verify-action {
+    padding: var(--space-xs) var(--space-md);
+    border: 1px solid var(--accent-oxblood);
+    border-radius: var(--radius-soft);
+    background: var(--surface-base);
+    color: var(--accent-oxblood);
+    font-family: var(--heading-family);
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity var(--motion-fast) var(--ease-deliberate);
+  }
+  .verify-action:hover { opacity: 0.85; }
+  .verify-raw {
     margin: 0;
     font-size: 0.8125rem;
     color: var(--text-secondary);
@@ -295,6 +425,12 @@
     display: inline-block;
     margin-top: var(--space-xs);
     word-break: break-all;
+  }
+  .verify-after {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
   }
 
   .modes {

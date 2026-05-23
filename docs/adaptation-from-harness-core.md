@@ -398,8 +398,71 @@ Live D-class on this PC: `codex login status` → "Logged in using ChatGPT" exit
 `~/.codex/auth.json` present (mtime predates this run — app wrote 0), `codex login
 --device-auth` flag confirmed present. tauri build: see implementation_manifest.
 
+## Slice 8 — codex login browser-open bug fix + usage outline-first
+
+**Status**: SUBSTANTIVE (Slice 8, run `run_20260523_000010_sw_llmwiki_slice8`).
+A UI/auth bug fix on top of Slice 6/7 — no NEW harness-core source was ported;
+this slice only refines the Slice-5c/6 codex-auth surface already adapted from the
+ima2 `codexDetect`/`oauthLauncher` pattern. Recorded here per the contract's
+"every harness-core adaptation recorded … (UI/auth fix면 간략)" clause.
+
+### Upstream pin (Slice 8)
+
+- **upstream HEAD observed at Slice 8 start**: `b381f880` (`harness-core` master). A
+  parallel SW gate track may advance this during the run; that is external and is
+  NOT a Slice-8 write — THIS run touches nothing under the harness-core working
+  tree (writes are confined to `D:\AI Project\llmwiki\**` + `runs/<run_id>/`).
+
+### What changed (Slice 8)
+
+- **detect-first (AC-LOGIN-DETECT-FIRST)**: the login button now runs the
+  read-only `codex_detect` BEFORE any spawn. An already-authed machine
+  short-circuits — no `codex login` spawn, no browser — and just flips
+  availability on with a Korean "이미 로그인" message. This removes the
+  "I pressed the button and nothing opened" confusion on a machine that is
+  already signed in (the no-browser is correct there).
+- **device-auth default + app-opens-browser (AC-LOGIN-DEVICE-BROWSER)**: the
+  spawn now defaults to `codex login --device-auth`, which prints a verification
+  URL + code regardless of TTY (the piped/no-TTY spawn could not rely on codex
+  auto-opening the browser). `codex_login.rs` parses the URL + the `XXXX-XXXX`
+  code into a structured `Verification` and opens the URL itself via an
+  OS-delegated command (`cmd /C start` / `open` / `xdg-open`) — no OAuth round
+  trip, no credential handling; codex still owns auth.json.
+- **code UI (AC-LOGIN-CODE-UI)**: ModeToggle shows the code prominently with a
+  copy button + an open-URL button (`window.open`, OS-delegated) + a [다시 검출]
+  after-login hint. Only the non-secret verification code/URL is surfaced — the
+  access token is never on this path (forbidden_side_effects honored).
+- **usage outline-first (AC-USAGE-OUTLINE-FIRST)**: UsageTab now leads with a
+  목차/스키마-먼저 callout and a five-step order (목차→원서→추출→ChatGPT→위키).
+
+### What was NOT adapted (Slice 8)
+
+- A Tauri opener/shell PLUGIN (and its capabilities + npm dependency) — the app
+  already shells out via `Command`, so the OS-delegated `start`/`open`/`xdg-open`
+  spawn (Rust) + `window.open` (renderer) is the lighter, dependency-free path the
+  contract permits ("Tauri opener plugin 또는 window.open(OS 위임)"). No new
+  capability or crate was added.
+- Real OAuth success guarantee — unchanged from Slice 6 (graceful degradation to
+  copy-paste; codex login 실 OAuth 실패 = 복붙, not a crash).
+
+New smoke scenarios (`fixtures/t1-slice8-smoke.mjs`): Tier-1 `detect-first-wiring`,
+`login-graceful`, `usage-outline-first`, `no-token-display`; Tier-2
+`device-auth-default`, `url-code-parse`, `code-ui`, `no-authwrite` — all green. The
+Slice-6 `device-auth-gui` scenario was updated in place to assert the Slice-8
+superseding design (device-auth as the primary path), following the same
+slice-supersedes-slice precedent the Slice-6 `sticky-sidebar-css` scenario set when
+Slice 7 replaced the sticky sidebar. Slice 6 (9) + Slice 7 (4) + static-scan
+regression green; svelte-check 0 errors (1 pre-existing node-types warning); 31
+Rust lib tests pass (7 new in codex_login: parse_url, parse_device_code accept/
+reject, build_verification split, open_in_browser non-http guard, Verification
+serialize). Live D-class on this PC: `codex login status` → authed (the detect-
+first path applies — no spawn, no browser, by design); app wrote 0 to auth.json;
+access token displayed 0 (only verification code/URL surfaced). tauri build: see
+implementation_manifest.
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 8, run `run_20260523_000010_sw_llmwiki_slice8`).
 - `agreed_contract.json` (Slice 6, run `run_20260523_000008_sw_llmwiki_slice6`).
 - `agreed_contract.json` (Slice 5c, run `run_20260523_000007_sw_llmwiki_slice5c`).
 - `agreed_contract.json` (Slice 5b, run `run_20260523_000006_sw_llmwiki_slice5b`).
