@@ -242,11 +242,13 @@ async function deviceAuthDefault() {
   pass(report);
 }
 
-// AC-LOGIN-DEVICE-BROWSER (parse + open): codex_login.rs splits a line into a
-// structured Verification, extracts the XXXX-XXXX code + http(s) URL, rejects
-// non-codes, and opens the URL via an OS-delegated command (start/open/xdg-open).
-// We exercise the pure parsers by importing the unit-test expectations through a
-// source scan AND a behavioural check of the parse helpers' shape.
+// AC-LOGIN-DEVICE-BROWSER (parse + open) + SEC-URL-INJECTION repair:
+// codex_login.rs splits a line into a structured Verification, extracts the
+// XXXX-XXXX code + a STRICTLY-VALIDATED http(s) URL (metachar-rejecting,
+// length-bounded), rejects non-codes, and opens the URL only when its host is on
+// the device-auth allow-list — via a SHELL-FREE OS handoff (rundll32.exe on
+// Windows / open / xdg-open), never `cmd /C start`. We source-scan the helper
+// shapes + assert the adversarial-input unit tests are present.
 async function urlCodeParse() {
   const rust = read('src-tauri/src/codex_login.rs');
   const report = {
@@ -258,10 +260,22 @@ async function urlCodeParse() {
     code_requires_two_groups: /split_once\('-'\)/.test(rust) && /!b\.contains\('-'\)/.test(rust),
     has_build_verification: /fn build_verification\(/.test(rust),
     has_open_in_browser: /fn open_in_browser\(/.test(rust),
-    open_is_os_delegated: /"start"/.test(rust) && /"xdg-open"|xdg-open/.test(rust) && /"open"|Command::new\("open"\)/.test(rust),
-    open_refuses_non_http: /starts_with\("http:\/\/"\)\s*\|\|\s*lower\.starts_with\("https:\/\/"\)/.test(rust),
+    // Slice-8 repair (SEC-URL-INJECTION): the Windows open path is SHELL-FREE —
+    // rundll32.exe (a direct PE exec), NOT `cmd /C start` (which re-parses shell
+    // operators). macOS `open` / Linux `xdg-open` pass the URL as a single argv.
+    open_is_os_delegated: /rundll32\.exe/.test(rust) && /"xdg-open"|xdg-open/.test(rust) && /"open"|Command::new\("open"\)/.test(rust),
+    open_is_shell_free: !/\[\s*"\/C"\s*,\s*"start"/.test(rust) && !/"start",\s*"",\s*url/.test(rust),
+    open_refuses_non_http: /fn is_safe_url\(/.test(rust) && /starts_with\("http:\/\/"\)\s*\|\|\s*lower\.starts_with\("https:\/\/"\)/.test(rust),
+    // Repair: strict parse boundary — metachar rejection + length bound + host
+    // allow-list gate before any open.
+    parse_rejects_metachars: /URL_FORBIDDEN_CHARS/.test(rust) && /'&'/.test(rust) && /'\|'/.test(rust) && /'\^'/.test(rust) && /'%'/.test(rust),
+    parse_bounds_length: /MAX_URL_LEN/.test(rust),
+    open_gated_by_host_allowlist: /fn host_is_allowed\(/.test(rust) && /VERIFICATION_HOST_ALLOWLIST/.test(rust) && /if !host_is_allowed\(url\)/.test(rust),
+    allowlist_has_codex_hosts: /"chatgpt\.com"/.test(rust) && /"openai\.com"/.test(rust) && /"auth\.openai\.com"/.test(rust),
     // Unit tests cover the parse contract (run by `cargo test`, asserted present).
-    has_parse_unit_tests: /fn parse_url_extracts_and_trims/.test(rust) && /fn parse_device_code_accepts_xxxx_xxxx/.test(rust) && /fn parse_device_code_rejects_non_code/.test(rust) && /fn build_verification_splits_url_and_code/.test(rust) && /fn open_in_browser_rejects_non_http/.test(rust),
+    has_parse_unit_tests: /fn parse_device_code_accepts_xxxx_xxxx/.test(rust) && /fn parse_device_code_rejects_non_code/.test(rust) && /fn build_verification_surfaces_clean_allowlisted_url/.test(rust) && /fn open_in_browser_rejects_non_http/.test(rust),
+    // Repair: adversarial-input tests (the contract the prior suite missed).
+    has_adversarial_tests: /fn parse_url_rejects_shell_metacharacter_payloads/.test(rust) && /fn open_in_browser_refuses_off_allowlist_host/.test(rust) && /fn build_verification_neutralizes_hostile_line_end_to_end/.test(rust) && /fn windows_opener_is_shell_free/.test(rust),
   };
   if (!report.has_verification_struct) return fail(report, 'no structured Verification{url,code,browser_opened,raw}');
   if (!report.has_parse_url) return fail(report, 'no parse_url helper');
@@ -270,9 +284,15 @@ async function urlCodeParse() {
   if (!report.code_requires_two_groups) return fail(report, 'parse_device_code does not require the canonical two-group XXXX-XXXX shape');
   if (!report.has_build_verification) return fail(report, 'no build_verification (split + open)');
   if (!report.has_open_in_browser) return fail(report, 'no open_in_browser helper (app does not open the URL)');
-  if (!report.open_is_os_delegated) return fail(report, 'browser open is not OS-delegated (start/open/xdg-open)');
-  if (!report.open_refuses_non_http) return fail(report, 'open_in_browser does not refuse non-http(s) URLs');
+  if (!report.open_is_os_delegated) return fail(report, 'browser open is not OS-delegated SHELL-FREE (rundll32/open/xdg-open)');
+  if (!report.open_is_shell_free) return fail(report, 'Windows open path still routes through `cmd /C start` (injection sink not removed)');
+  if (!report.open_refuses_non_http) return fail(report, 'open path does not refuse non-http(s) URLs (is_safe_url scheme guard missing)');
+  if (!report.parse_rejects_metachars) return fail(report, 'parse boundary does not reject shell metacharacters (& | ^ %)');
+  if (!report.parse_bounds_length) return fail(report, 'parse boundary does not bound URL length (MAX_URL_LEN)');
+  if (!report.open_gated_by_host_allowlist) return fail(report, 'open is not gated by the verification host allow-list');
+  if (!report.allowlist_has_codex_hosts) return fail(report, 'host allow-list missing the codex device-auth hosts');
   if (!report.has_parse_unit_tests) return fail(report, 'missing Rust unit tests for the parse/open contract');
+  if (!report.has_adversarial_tests) return fail(report, 'missing adversarial-input Rust tests (metachar/off-allowlist/end-to-end/shell-free)');
   pass(report);
 }
 
@@ -332,9 +352,12 @@ async function noAuthWrite() {
   const osUserDirRe = sentinelPattern ? new RegExp('\\b(' + sentinelPattern + ')\\b') : /$^/;
   const rustOsDirHit = osUserDirRe.test(rustCode);
 
-  // Browser open is OS-delegated (a process spawn of the OS handler), never an
-  // OAuth/credential round trip. The opener spawns start/open/xdg-open only.
-  const opensViaOsHandler = /Command::new\("cmd"\)[\s\S]*?"start"/.test(rust) || /xdg-open/.test(rust);
+  // Browser open is OS-delegated AND SHELL-FREE (a direct process spawn of the
+  // OS handler — rundll32.exe on Windows / open / xdg-open), never via a shell
+  // that re-parses the command line, and never an OAuth/credential round trip.
+  const opensViaOsHandler =
+    (/rundll32\.exe/.test(rust) || /xdg-open/.test(rust) || /Command::new\("open"\)/.test(rust)) &&
+    !/\[\s*"\/C"\s*,\s*"start"/.test(rust);
   const noOauthRoundTrip = !/reqwest|http_client|exchange_token|client_secret/.test(rustCode);
 
   const spawnsCodexLogin = rust.includes('"login"');

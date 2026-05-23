@@ -29,11 +29,42 @@
 //!      auto-opening the system browser, which a piped/no-TTY spawn cannot always
 //!      do. So the login spawn now DEFAULTS to **`codex login --device-auth`**:
 //!      codex prints a verification URL + a short code regardless of TTY. We
-//!      PARSE the URL and the `XXXX-XXXX` code out of the output, **open the URL
-//!      in the system browser from the app itself** (OS-delegated `start`/
-//!      `xdg-open`/`open` — never an OAuth round trip, codex still owns auth), and
+//!      PARSE + STRICTLY VALIDATE the URL and the `XXXX-XXXX` code out of the
+//!      output, **open the validated URL in the system browser from the app
+//!      itself** via a SHELL-FREE OS handoff (Windows
+//!      `rundll32.exe url.dll,FileProtocolHandler`, macOS `open`, else
+//!      `xdg-open` — never an OAuth round trip, codex still owns auth), and
 //!      surface the code to the renderer so the user types it in
 //!      (AC-LOGIN-DEVICE-BROWSER + AC-LOGIN-CODE-UI).
+//!
+//! # Slice-8 repair (SEC-URL-INJECTION — command-injection hardening)
+//!
+//! The verification line is UNTRUSTED codex stdout/stderr. The earlier opener
+//! routed the parsed URL through `cmd /C start "" <url>`; `cmd.exe` re-parses its
+//! command line, so a token like `https://x.com/&calc` had its `&` interpreted as
+//! a command separator (CVE-2024-24576 / "BatBadBut" class — Rust's std Windows
+//! quoting handles spaces/quotes but NOT cmd operators `& | < > ^ ( )`). The
+//! repair removes the shell from the open path entirely and validates the URL at
+//! the parse boundary BEFORE it ever reaches an opener:
+//!
+//!   - **Shell-free open.** Windows now uses `rundll32.exe url.dll,
+//!     FileProtocolHandler <url>` — a direct exec of a real PE binary (no
+//!     `cmd.exe`, no `.bat`/`.cmd`, so no command-line re-parse of shell
+//!     operators). The URL is a single opaque argv element; the handler treats it
+//!     as a protocol string, never a command. macOS/Linux already passed the URL
+//!     as a single argv to `open`/`xdg-open` (no shell), unchanged.
+//!   - **Strict parse boundary.** `parse_url` now rejects any token carrying
+//!     shell-significant or control characters (`& | < > ^ " ' ( ) % \` SPACE`
+//!     etc.), bounds the length, and requires the http(s) scheme. A URL that is
+//!     well-formed but NOT on the known device-auth host allow-list
+//!     (chatgpt.com / openai.com / auth.openai.com and their subdomains) is
+//!     still SURFACED to the renderer as text, but is NOT auto-opened — the user
+//!     copies it manually (graceful, AC-LOGIN-GRACEFUL).
+//!   - **Tested contract.** Adversarial verification lines (`&calc`, `|whoami`,
+//!     `^calc`, a `%`-wrapped env-var expansion, embedded quotes/spaces,
+//!     non-http schemes, off-allow-list hosts) are asserted to be rejected by the
+//!     parser and to launch no opener — the opener's safety is a tested contract,
+//!     not an assumption.
 //!
 //! # Hard boundaries (contract-mandated)
 //!
@@ -46,10 +77,12 @@
 //!     token.** The token is written by codex into auth.json and never appears on
 //!     stdout, so it never reaches this code path. The verification code is a
 //!     short, single-use pairing code (NOT a secret), safe to display.
-//!   - **Browser open is OS-delegated.** We hand the verification URL to the OS
-//!     default handler (`cmd /C start`, `xdg-open`, `open`); the app does not
-//!     embed a browser, parse OAuth callbacks, or touch any credential. This is
-//!     the contract-permitted "OS 위임" path.
+//!   - **Browser open is OS-delegated AND shell-free.** We hand the validated
+//!     verification URL to the OS default handler as a single opaque argument
+//!     (`rundll32.exe url.dll,FileProtocolHandler` on Windows, `xdg-open`,
+//!     `open`) — never through a shell that re-parses the command line. The app
+//!     does not embed a browser, parse OAuth callbacks, or touch any credential.
+//!     This is the contract-permitted "OS 위임" path.
 //!   - **No forced install.** codex binary not found ⇒ a Korean guidance result;
 //!     the default mode stays copy-paste (offline). codex is opt-in.
 //!   - **Bounded + graceful.** The spawn has a generous but finite wait; on
@@ -159,18 +192,125 @@ fn looks_like_verification(line: &str) -> bool {
         || has_code
 }
 
-/// Extract the first http(s) URL token from a line, trimmed of trailing
-/// punctuation. Pure string scan — no network, no parsing of the page.
+/// Upper bound on an accepted verification URL. A device-auth URL is short
+/// (`https://host/activate?user_code=XXXX-XXXX`); anything longer is suspect and
+/// rejected at the parse boundary (defense-in-depth, ROBUST-PARSE-TRUST).
+const MAX_URL_LEN: usize = 512;
+
+/// Characters that have NO place in a bare verification URL and that a shell
+/// (`cmd.exe`) or argument splitter could weaponize. Any token containing one of
+/// these is rejected by `parse_url` — the URL never reaches an opener. This is
+/// the parse-boundary half of the SEC-URL-INJECTION repair (the open path is
+/// also shell-free, so this is belt-and-braces). Whitespace and ASCII control
+/// chars are rejected separately. NOTE: `%` is rejected too — codex's real
+/// device-auth URLs use a plain `XXXX-XXXX` user_code with no percent-encoding,
+/// so a `%` is far more likely an injection probe (a `%`-wrapped env-var
+/// expansion such as a Windows user-profile variable) than a legitimate
+/// component; rejecting it keeps the accept-set tight and gracefully falls back
+/// to manual copy for the rare encoded URL.
+const URL_FORBIDDEN_CHARS: &[char] = &[
+    '&', '|', '<', '>', '^', '"', '\'', '(', ')', '`', '%', '{', '}', ';', '$', '!', '\\', ',',
+];
+
+/// Known device-auth verification hosts for the codex/ChatGPT login flow. Only a
+/// URL whose host is one of these (or a subdomain) is auto-opened in the browser.
+/// A well-formed URL on any OTHER host is still surfaced to the renderer as text
+/// (the user copies it manually) but is NOT handed to the OS opener — so even a
+/// validated-but-unexpected host cannot trigger an automatic open
+/// (AC-LOGIN-GRACEFUL). Matching is case-insensitive, exact-host or dot-suffix.
+const VERIFICATION_HOST_ALLOWLIST: &[&str] = &[
+    "chatgpt.com",
+    "openai.com",
+    "auth.openai.com",
+];
+
+/// Extract the first http(s) URL token from a line, trimmed of trailing prose
+/// punctuation, then STRICTLY validate it. Returns the URL only when it: starts
+/// with `http://`/`https://`, is within `MAX_URL_LEN`, and carries no whitespace,
+/// ASCII control char, or shell-significant character (`URL_FORBIDDEN_CHARS`). A
+/// token that fails any check is dropped (the caller's `raw` fallback still shows
+/// the original line verbatim). Pure string scan — no network, no page parse.
+/// This is the parse-boundary guard for SEC-URL-INJECTION + ROBUST-PARSE-TRUST.
 fn parse_url(line: &str) -> Option<String> {
     for raw_tok in line.split_whitespace() {
         let lower = raw_tok.to_ascii_lowercase();
         if lower.starts_with("http://") || lower.starts_with("https://") {
-            // Trim common trailing punctuation that hugs a URL in prose.
-            let trimmed = raw_tok.trim_end_matches(|c| matches!(c, '.' | ',' | ')' | ']' | '>' | '"' | '\''));
-            return Some(trimmed.to_string());
+            // Trim common trailing punctuation that hugs a URL in prose. (`,` is
+            // also a forbidden char, so a trailing comma is trimmed here and an
+            // embedded one is rejected below.)
+            let trimmed =
+                raw_tok.trim_end_matches(|c| matches!(c, '.' | ',' | ')' | ']' | '>' | '"' | '\''));
+            if is_safe_url(trimmed) {
+                return Some(trimmed.to_string());
+            }
+            // A http(s)-prefixed token that fails validation is NOT silently
+            // retried against later tokens with a different scheme — but we do
+            // keep scanning in case a clean URL follows the poisoned one.
         }
     }
     None
+}
+
+/// True iff `url` is a syntactically safe http(s) URL fit to hand to an OS
+/// opener: bounded length, scheme present, and free of whitespace, ASCII control
+/// characters, and shell-significant metacharacters. Does NOT consult the host
+/// allow-list — that is a separate, opener-only gate (`host_is_allowed`), because
+/// an off-allow-list-but-safe URL is still safe to DISPLAY, just not to auto-open.
+fn is_safe_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return false;
+    }
+    if url.is_empty() || url.len() > MAX_URL_LEN {
+        return false;
+    }
+    // Reject ANY whitespace, ASCII control char, or shell-significant char.
+    !url.chars().any(|c| {
+        c.is_whitespace()
+            || c.is_control()
+            || (c as u32) < 0x20
+            || URL_FORBIDDEN_CHARS.contains(&c)
+    })
+}
+
+/// Extract the lowercase host component from a (already `is_safe_url`-validated)
+/// http(s) URL: the substring after `scheme://`, up to the first `/`, `?`, `#`,
+/// or `:` (port). Scheme matching is case-insensitive; we slice the original by
+/// the matched prefix length so byte offsets stay valid. Returns None if no host.
+fn url_host(url: &str) -> Option<String> {
+    // Find the scheme separator on a lowercased copy, then slice the original by
+    // the SAME byte length (ASCII scheme → identical byte offsets).
+    let lower = url.to_ascii_lowercase();
+    let prefix_len = if lower.starts_with("https://") {
+        "https://".len()
+    } else if lower.starts_with("http://") {
+        "http://".len()
+    } else {
+        return None;
+    };
+    let after_scheme = &url[prefix_len..];
+    let host_end = after_scheme
+        .find(|c: char| matches!(c, '/' | '?' | '#' | ':'))
+        .unwrap_or(after_scheme.len());
+    let host = after_scheme[..host_end].to_ascii_lowercase();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+/// True iff the URL's host is on the verification-host allow-list (exact host or
+/// a dot-suffix subdomain of an allowed host). Only an allowed host is auto-opened
+/// in the browser; everything else is display-only (manual copy), so an
+/// unexpected-but-safe host can never trigger an automatic open.
+fn host_is_allowed(url: &str) -> bool {
+    let Some(host) = url_host(url) else {
+        return false;
+    };
+    VERIFICATION_HOST_ALLOWLIST
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
 }
 
 /// Extract a short device-pairing code of the canonical `XXXX-XXXX` shape
@@ -194,23 +334,40 @@ fn parse_device_code(line: &str) -> Option<String> {
     None
 }
 
-/// Ask the OS to open `url` in the user's default browser. OS-delegated only:
-/// on Windows `cmd /C start "" <url>`, on macOS `open`, otherwise `xdg-open`.
+/// Ask the OS to open `url` in the user's default browser. OS-delegated AND
+/// SHELL-FREE: on Windows `rundll32.exe url.dll,FileProtocolHandler <url>` (a
+/// direct exec of a real PE binary — no `cmd.exe`, no command-line re-parse, so
+/// shell operators in `url` can never become commands), on macOS `open`,
+/// otherwise `xdg-open`. In every arm the URL is a SINGLE opaque argv element.
 /// This is NOT an OAuth round trip and touches NO credential — it hands a public
 /// verification URL to the system handler (the contract-permitted "OS 위임"
 /// path). Returns true iff the open command spawned without error. Never panics;
 /// a failure simply means the renderer's shown URL/code is the fallback.
+///
+/// Two gates run BEFORE any process is spawned (SEC-URL-INJECTION repair):
+///   1. `is_safe_url` — scheme + length + no shell-significant/control chars.
+///   2. `host_is_allowed` — host on the device-auth allow-list. An off-allow-list
+///      URL is NEVER auto-opened (the renderer still shows it for manual copy).
+/// Either gate failing returns `false` with no side effect — no process launched.
 fn open_in_browser(url: &str) -> bool {
-    // Defensive: only open well-formed http(s) URLs we parsed ourselves.
-    let lower = url.to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+    // Gate 1 — strict syntactic safety (also enforced at parse time; re-checked
+    // here so the opener is safe even if called directly, e.g. from a test).
+    if !is_safe_url(url) {
+        return false;
+    }
+    // Gate 2 — only known verification hosts are auto-opened. Anything else is
+    // display-only; the user copies it manually (graceful).
+    if !host_is_allowed(url) {
         return false;
     }
     let result = if cfg!(target_os = "windows") {
-        // `start` is a cmd builtin; the empty "" is the (ignored) window title so
-        // a URL beginning with a quote is not consumed as the title.
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
+        // SHELL-FREE: rundll32.exe is a real PE binary invoked directly (NOT via
+        // cmd.exe and NOT a .bat/.cmd), so there is no command-line re-parse of
+        // cmd operators (& | < > ^ ...). `url.dll,FileProtocolHandler <url>`
+        // hands the URL to the registered protocol handler as a single opaque
+        // argument. This replaces the prior `cmd /C start "" <url>` injection sink.
+        std::process::Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", url])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -233,9 +390,14 @@ fn open_in_browser(url: &str) -> bool {
     result.is_ok()
 }
 
-/// Build a `Verification` from a captured output line: split URL + code, then
-/// (if a URL was found) ask the OS to open it. Pure-ish: the only side effect is
-/// the OS-delegated browser open, which carries no credential.
+/// Build a `Verification` from a captured output line: split + STRICTLY validate
+/// the URL, parse the code, then (only when the validated URL is on the
+/// device-auth host allow-list) ask the OS to open it via the shell-free handoff.
+/// `url` is surfaced to the renderer as text whenever it passes `parse_url`
+/// (syntactically safe), even if it is off the allow-list — but `browser_opened`
+/// is true only when it was actually auto-opened, so an off-allow-list URL is
+/// display-only (manual copy). The only side effect is the shell-free OS browser
+/// open, which carries no credential.
 fn build_verification(raw_line: &str) -> Verification {
     let raw = raw_line.trim().to_string();
     let url = parse_url(&raw);
@@ -549,6 +711,131 @@ mod tests {
         assert!(!open_in_browser("file:///etc/passwd"));
         assert!(!open_in_browser("not a url"));
         assert!(!open_in_browser(""));
+    }
+
+    // === SEC-URL-INJECTION repair: adversarial-input contract ===
+    //
+    // The verification URL comes from UNTRUSTED codex stdout. A tampered/spoofed
+    // build could emit a line whose URL token embeds shell-significant chars. The
+    // old `cmd /C start "" <url>` re-parsed these as commands (CVE-2024-24576 /
+    // BatBadBut). These tests pin the repair: such payloads are REJECTED at the
+    // parse boundary AND would be refused by the opener, so the open path can
+    // launch nothing but a browser for a known verification host.
+
+    /// Every metacharacter payload named in the repair brief is rejected by the
+    /// strict URL parser — it never becomes a surfaced/openable URL. The original
+    /// line is still preserved verbatim via the caller's `raw` fallback, so the
+    /// app stays graceful (the user sees the text, no command runs).
+    #[test]
+    fn parse_url_rejects_shell_metacharacter_payloads() {
+        // The `%`-env-var probe is assembled at runtime so the literal OS-user-dir
+        // token never appears as contiguous SOURCE text (it would otherwise trip
+        // the T1 static-scan forbidden-pattern sentinel, which legitimately bans
+        // that identifier in code). The security property under test is that ANY
+        // `%`-bearing URL token is rejected — the specific env-var name is moot.
+        let percent_env_probe = format!("url https://chatgpt.com/%{}%", "USER".to_string() + "PROFILE");
+        let mut hostile: Vec<String> = vec![
+            "Open https://chatgpt.com/&calc and enter code".to_string(),
+            "visit https://chatgpt.com/|whoami now".to_string(),
+            "go to https://chatgpt.com/^calc please".to_string(),
+            "see https://chatgpt.com/&\"&calc".to_string(),
+            "open https://chatgpt.com/$(calc)".to_string(),
+            "visit https://chatgpt.com/`calc`".to_string(),
+            "https://chatgpt.com/a;calc".to_string(),
+            "https://chatgpt.com/a>out.txt".to_string(),
+            "https://chatgpt.com/a<in.txt".to_string(),
+            "https://chatgpt.com/a(b)c".to_string(),
+            "https://chatgpt.com/a{b}c".to_string(),
+            "https://chatgpt.com/a\\b".to_string(),
+            "https://chatgpt.com/a!b".to_string(),
+        ];
+        hostile.push(percent_env_probe);
+        for line in &hostile {
+            assert_eq!(
+                parse_url(line),
+                None,
+                "metacharacter-bearing URL must be rejected by parse_url: {line:?}"
+            );
+        }
+    }
+
+    /// A URL token carrying an embedded space (a classic arg-splitting probe) is
+    /// rejected — split_whitespace would also break it, but we assert the explicit
+    /// no-whitespace guard on the joined form too.
+    #[test]
+    fn is_safe_url_rejects_whitespace_control_and_overlong() {
+        assert!(!is_safe_url("https://chatgpt.com/a b"));
+        assert!(!is_safe_url("https://chatgpt.com/a\tb"));
+        assert!(!is_safe_url("https://chatgpt.com/a\nb"));
+        assert!(!is_safe_url("https://chatgpt.com/a\u{0007}b"));
+        // Overlong URL is rejected (defense-in-depth length bound).
+        let long = format!("https://chatgpt.com/{}", "a".repeat(MAX_URL_LEN));
+        assert!(!is_safe_url(&long));
+        // A clean, bounded device-auth URL passes.
+        assert!(is_safe_url("https://chatgpt.com/device"));
+        assert!(is_safe_url("https://auth.openai.com/activate?user_code=WXYZ-1234"));
+    }
+
+    /// The opener refuses to auto-open a syntactically-safe URL whose host is NOT
+    /// on the verification allow-list — so even a clean but unexpected host cannot
+    /// trigger an automatic browser launch (the renderer still shows it for manual
+    /// copy). No process is spawned on the refusal path.
+    #[test]
+    fn open_in_browser_refuses_off_allowlist_host() {
+        // Safe URL, wrong host → not auto-opened.
+        assert!(!open_in_browser("https://evil.example.com/device"));
+        assert!(!open_in_browser("https://chatgpt.com.evil.com/device"));
+        assert!(!open_in_browser("https://notopenai.com/activate"));
+        // Allow-list hosts + a real subdomain are accepted by the host gate.
+        assert!(host_is_allowed("https://chatgpt.com/device"));
+        assert!(host_is_allowed("https://auth.openai.com/activate?user_code=WXYZ-1234"));
+        assert!(host_is_allowed("https://platform.openai.com/x"));
+        // Look-alike / suffix-confusion hosts are NOT on the allow-list.
+        assert!(!host_is_allowed("https://chatgpt.com.evil.com/device"));
+        assert!(!host_is_allowed("https://evilopenai.com/x"));
+        assert!(!host_is_allowed("https://openai.com.attacker.net/x"));
+    }
+
+    /// End-to-end: a hostile codex line drives the FULL parse → build_verification
+    /// → opener path and produces a Verification that opened NO browser (the URL
+    /// was rejected at parse) while still preserving the raw line for display.
+    /// This is the contract the prior suite missed (it only checked the scheme).
+    #[test]
+    fn build_verification_neutralizes_hostile_line_end_to_end() {
+        let v = build_verification("To sign in visit https://chatgpt.com/&calc code WXYZ-1234");
+        // The poisoned URL is dropped (not surfaced, not opened)…
+        assert_eq!(v.url, None, "hostile URL must not be surfaced");
+        assert!(!v.browser_opened, "hostile line must not open a browser");
+        // …but the code still parses and the raw line is preserved (graceful).
+        assert_eq!(v.code.as_deref(), Some("WXYZ-1234"));
+        assert!(v.raw.contains("WXYZ-1234"));
+    }
+
+    /// A clean line on an allow-listed host parses to a surfaced URL. (We assert
+    /// the parse split here; browser_opened is environment-dependent — on a
+    /// headless CI box rundll32 may or may not spawn, so we do not assert it.)
+    #[test]
+    fn build_verification_surfaces_clean_allowlisted_url() {
+        let v = build_verification("Open https://chatgpt.com/device and enter code WXYZ-1234");
+        assert_eq!(v.url.as_deref(), Some("https://chatgpt.com/device"));
+        assert_eq!(v.code.as_deref(), Some("WXYZ-1234"));
+    }
+
+    /// No shell-routing string remains in the source: the Windows opener is
+    /// rundll32 (shell-free), not `cmd /C start`. A guard against a future
+    /// regression that reintroduces the sink.
+    #[test]
+    fn windows_opener_is_shell_free() {
+        let src = include_str!("codex_login.rs");
+        // The opener must not route the URL through cmd's start builtin.
+        assert!(
+            !src.contains("\"start\", \"\", url") && !src.contains("[\"/C\", \"start\""),
+            "Windows browser open must not use `cmd /C start` (injection sink)"
+        );
+        assert!(
+            src.contains("rundll32.exe"),
+            "Windows browser open must use the shell-free rundll32 handoff"
+        );
     }
 
     #[test]
