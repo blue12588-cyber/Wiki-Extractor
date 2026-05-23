@@ -104,13 +104,15 @@ export async function onFileSelected(file: File, zone: UploadZoneHandle | null) 
     return;
   }
 
-  const path = (file as unknown as { path?: string }).path;
-  if (!path) {
-    zone?.set_reject('OS에서 파일을 드래그하세요(선택 대화상자는 경로에 접근할 수 없습니다).');
-    return;
-  }
+  // A WebView2 `File` object exposes no usable OS path (the non-standard
+  // Electron `.path` field does not exist), so we hand the host the bytes we
+  // already read above. This works for BOTH the file picker and drag-drop —
+  // no OS path required.
   try {
-    const result = await invoke<UploadResponse>('upload_file', { path });
+    const result = await invoke<UploadResponse>('upload_bytes', {
+      filename: file.name,
+      bytes: Array.from(full),
+    });
     zone?.set_success(
       `${file.name} → data/sources/${result.source_id}/ (${result.byte_count} 바이트, ${result.detected_type})`,
     );

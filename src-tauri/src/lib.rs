@@ -60,6 +60,7 @@ pub fn run() {
             oauth_child::oauth_proxy_stop,
             dev_fallback::dev_fallback_status,
             upload_cmd::upload_file,
+            upload_cmd::upload_bytes,
             extract_cmd::extract_fixture,
             banner_audit::__t1_banner_audit,
             wiki_cmd::wiki_write_entry,

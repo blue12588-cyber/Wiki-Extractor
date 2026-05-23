@@ -196,6 +196,43 @@ fn sha256_prefix(bytes: &[u8]) -> String {
 
 /* ---------------- Tauri command ---------------- */
 
+/// Shared ingest body: verify magic bytes, hash → source_id, write the bytes
+/// into `<root>/data/sources/<source_id>/<sanitized-name>` (path-safe). Both the
+/// disk-path command (`upload_file`) and the in-memory-bytes command
+/// (`upload_bytes`) funnel through here so the magic-bytes / hashing /
+/// out-of-root guards are identical regardless of how the bytes arrived.
+///
+/// `upload_bytes` is the path the renderer actually uses: a WebView2 `File`
+/// object exposes NO `.path` (the non-standard Electron field does not exist),
+/// so the renderer reads the bytes it already has (for the magic-byte check) and
+/// hands them to the host directly — no OS path needed for picker OR drag-drop.
+fn ingest_bytes(original_name: &str, buf: &[u8]) -> Result<UploadResult, UploadError> {
+    // Magic-bytes check on the first READ_HEAD_LEN bytes.
+    let head_len = std::cmp::min(buf.len(), READ_HEAD_LEN);
+    let declared = verify_magic_bytes(original_name, &buf[..head_len])?;
+    let detected = detect_type_label(declared).to_string();
+
+    let source_id = sha256_prefix(buf);
+
+    let root = resolve_root()?;
+    let dest_dir = root.join("data").join("sources").join(&source_id);
+    let leaf = sanitize_leaf(original_name);
+    let dest = dest_dir.join(&leaf);
+
+    fs::create_dir_all(&dest_dir)
+        .map_err(|e| UploadError::of("io", format!("mkdir failed: {e}")))?;
+
+    assert_under_root(&root, &dest)?;
+
+    fs::write(&dest, buf)
+        .map_err(|e| UploadError::of("io", format!("write failed: {e}")))?;
+
+    let written = dest.to_string_lossy().to_string();
+    let byte_count = buf.len() as u64;
+
+    Ok(UploadResult { source_id, written_path: written, byte_count, detected_type: detected })
+}
+
 #[tauri::command]
 pub fn upload_file(path: String) -> Result<UploadResult, UploadError> {
     let src_path = PathBuf::from(&path);
@@ -215,30 +252,16 @@ pub fn upload_file(path: String) -> Result<UploadResult, UploadError> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "upload.bin".into());
 
-    // Magic-bytes check on the first READ_HEAD_LEN bytes.
-    let head_len = std::cmp::min(buf.len(), READ_HEAD_LEN);
-    let declared = verify_magic_bytes(&original_name, &buf[..head_len])?;
-    let detected = detect_type_label(declared).to_string();
+    ingest_bytes(&original_name, &buf)
+}
 
-    let source_id = sha256_prefix(&buf);
-
-    let root = resolve_root()?;
-    let dest_dir = root.join("data").join("sources").join(&source_id);
-    let leaf = sanitize_leaf(&original_name);
-    let dest = dest_dir.join(&leaf);
-
-    fs::create_dir_all(&dest_dir)
-        .map_err(|e| UploadError::of("io", format!("mkdir failed: {e}")))?;
-
-    assert_under_root(&root, &dest)?;
-
-    fs::write(&dest, &buf)
-        .map_err(|e| UploadError::of("io", format!("write failed: {e}")))?;
-
-    let written = dest.to_string_lossy().to_string();
-    let byte_count = buf.len() as u64;
-
-    Ok(UploadResult { source_id, written_path: written, byte_count, detected_type: detected })
+/// In-memory upload: the renderer passes the file's bytes (a WebView2 `File` has
+/// no usable OS path) plus the original filename. Same magic-byte / hashing /
+/// out-of-root guards as `upload_file`. This is the command the renderer invokes
+/// for both the file picker and drag-drop.
+#[tauri::command]
+pub fn upload_bytes(filename: String, bytes: Vec<u8>) -> Result<UploadResult, UploadError> {
+    ingest_bytes(&filename, &bytes)
 }
 
 #[cfg(test)]

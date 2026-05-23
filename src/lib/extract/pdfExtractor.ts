@@ -4,10 +4,15 @@
  * Authority: agreed_contract.json#AC-5 (same-host re-parse byte-identical).
  *
  * Determinism plan:
- *   - We use the legacy CommonJS-compatible build of pdfjs-dist, which is
- *     Node-runnable without DOM.
- *   - Worker is disabled (`useWorkerFetch: false`, GlobalWorkerOptions left
- *     unset; we call without spinning a worker thread).
+ *   - We use the legacy ESM build of pdfjs-dist.
+ *   - The worker is provided through Vite's `?worker` import wired to
+ *     `GlobalWorkerOptions.workerPort`. In a packaged WebView2 (a `window`
+ *     context) pdfjs-dist v4 REQUIRES a worker and throws
+ *     "No GlobalWorkerOptions.workerSrc specified" otherwise — the older
+ *     "run on the main thread" path only auto-applies under Node. Vite bundles
+ *     the worker as a same-origin module worker, so it loads from the embedded
+ *     Tauri assets without a network fetch. Text extraction is deterministic
+ *     regardless of worker vs main-thread, so this does not affect AC-5.
  *   - Font loading is disabled (`disableFontFace: true`,
  *     `useSystemFonts: false`). For text extraction we do not need glyph
  *     rendering — only the text content stream.
@@ -29,11 +34,23 @@ export interface PdfExtractionResult {
 
 /** Lazy import so consumers that never call this extractor do not pay the cost. */
 async function loadPdfjs(): Promise<typeof import('pdfjs-dist/legacy/build/pdf.mjs')> {
-  // Use the legacy ESM build — Node-compatible and worker-optional.
-  // The dynamic import expression below is intentionally a string template so
-  // bundlers do not eagerly inline the whole pdfjs payload.
+  // Use the legacy ESM build. Heavy payload stays lazily imported.
   // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-  return await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  // Wire a Vite-bundled module worker once. pdfjs-dist v4 requires a worker in a
+  // `window` context (the packaged WebView2): without one it throws
+  // "No GlobalWorkerOptions.workerSrc specified". Vite's `?worker` import yields
+  // a same-origin worker constructor, so it loads from the embedded Tauri assets
+  // with no network fetch. Setting `workerPort` (vs `workerSrc`) lets Vite own
+  // the module-worker instantiation, which is the reliable path under the Tauri
+  // custom protocol.
+  if (!pdfjs.GlobalWorkerOptions.workerPort && !pdfjs.GlobalWorkerOptions.workerSrc) {
+    const { default: PdfWorker } = (await import(
+      'pdfjs-dist/legacy/build/pdf.worker.min.mjs?worker'
+    )) as unknown as { default: new () => Worker };
+    pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
+  }
+  return pdfjs;
 }
 
 export async function extractPdfText(buffer: Uint8Array): Promise<PdfExtractionResult> {
@@ -47,8 +64,6 @@ export async function extractPdfText(buffer: Uint8Array): Promise<PdfExtractionR
     useSystemFonts: false,
     disableFontFace: true,
     isEvalSupported: false,
-    // Skip worker (run in main thread).
-    useWorker: false,
     // No verbosity. Workaround: pdfjs-dist exposes verbosity via property.
     verbosity: 0,
   } as Parameters<typeof pdfjs.getDocument>[0]);
