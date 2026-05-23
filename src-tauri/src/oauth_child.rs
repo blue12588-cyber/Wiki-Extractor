@@ -111,7 +111,19 @@ pub struct OAuthChild {
 /// restarts on exit); here a single bounded attempt is contract-aligned: a
 /// missing ready line within the window routes to `ReadyLineGrammarMismatch`
 /// (orchestrator stop_condition) rather than spinning forever.
-const READY_TIMEOUT_MS: u64 = 12_000;
+// First run shells out to `npx -y openai-oauth`, which DOWNLOADS the package
+// from npm on a cold cache before the proxy can print its ready URL. 12s was too
+// short for that first fetch (it timed out → degrade → orphaned download). 60s
+// covers a cold download; a warm npx cache resolves in ~1-2s so the longer
+// ceiling only matters on the very first auto-mode run.
+const READY_TIMEOUT_MS: u64 = 60_000;
+
+/// Windows `CREATE_NO_WINDOW` (0x0800_0000): the proxy is a long-running child;
+/// without this flag `cmd /C npx …` pops a visible console window that lingers
+/// for the life of the proxy. We run it hidden (stdout/stderr are already piped
+/// and scanned for the ready URL).
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Parse a single line of openai-oauth stdout for the ready URL pattern.
 /// Returns the (port, full URL) tuple iff the line matches
@@ -222,6 +234,9 @@ pub async fn spawn_oauth_child(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Hide the console window the `cmd /C npx …` shim would otherwise pop.
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
 
     let mut child = command.spawn().map_err(|e| {
         // Origin-aware Korean reason: a WSL cross-boundary spawn failure is

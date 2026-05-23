@@ -190,6 +190,9 @@ export async function buildWiki() {
     // (codex 토큰)에 도달한다. 준비 실패 시 아래 호출들이 그대로 오프라인 결정적
     // 추출로 graceful degrade 하므로 앱은 계속 동작한다(강제 정지 없음).
     if (autoModeActive()) {
+      // 첫 실행은 npx가 openai-oauth를 내려받느라 수십 초 걸릴 수 있다(이후 캐시됨).
+      // 사용자가 멈춘 줄 알지 않도록 준비 중임을 먼저 알린다.
+      pipeline.notice = '자동 LLM 프록시 준비 중… (첫 실행은 openai-oauth 다운로드로 시간이 걸릴 수 있습니다)';
       const proxy = await ensureProxy();
       pipeline.llmCfg = await llmConfig(); // "LLM 연결됨/미연결" 표시 갱신
       if (proxy.state !== 'ready') {

@@ -90,6 +90,8 @@
 
 use std::io::Read;
 use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -247,11 +249,15 @@ fn build_npm_prefix_probe_command(codex_cmd_path: &str) -> Command {
 /// Windows directory."). We therefore take the LAST non-empty, drive-rooted line
 /// of stdout as the prefix, so such a warning never poisons the path.
 fn resolve_npm_global_prefix() -> Option<String> {
-    let spawned = build_npm_prefix_command()
+    let mut command = build_npm_prefix_command();
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
+        .stderr(Stdio::null());
+    // Hide the console window (CREATE_NO_WINDOW = 0x0800_0000).
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    let spawned = command.spawn();
 
     let mut child = match spawned {
         Ok(c) => c,
@@ -335,11 +341,15 @@ fn probe_login_status_npm_prefix() -> Option<LoginProbe> {
 /// `Command` has no built-in timeout, so on timeout we kill the child
 /// (best-effort) and report `None`, never blocking the app.
 fn run_probe_command(mut command: Command) -> Option<LoginProbe> {
-    let spawned = command
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+        .stderr(Stdio::null());
+    // Hide the console window the `cmd /C …` / `wsl.exe …` shim would flash on
+    // every detect (app launch + 다시 검출). CREATE_NO_WINDOW = 0x0800_0000.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    let spawned = command.spawn();
 
     let mut child = match spawned {
         Ok(c) => c,
