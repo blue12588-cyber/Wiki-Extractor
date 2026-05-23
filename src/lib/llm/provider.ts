@@ -103,6 +103,26 @@ export interface CodexDetectSnapshot {
   codex_cli_missing: boolean;
   /** Where auth was detected (Slice 9). Defaults to 'none' outside Tauri. */
   origin: CodexOrigin;
+  /**
+   * Self-diagnosis summary (Slice 10 — AC-DETECT-SELFDIAG). The resolved home
+   * path + which signal produced the result, or why nothing was found
+   * (`home=<path> · auth_file:<path>` / `probe_path` / `probe_npm_prefix` /
+   * `probe_wsl` / `none:<reason>`). PATHS + labels only — never auth contents or
+   * a token/secret. Surfaced as a small muted line so a future detection failure
+   * is diagnosable instead of silent.
+   */
+  detail: string;
+}
+
+/**
+ * The outcome of a `detectCodex` call (Slice 10 — AC-REFRESH-SURFACE). Always
+ * carries a usable `snapshot` (graceful degrade); `error` is a Korean reason
+ * string when the `invoke('codex_detect')` call THREW (so "다시 검출" never looks
+ * dead), or `null` on success / outside-Tauri-preview.
+ */
+export interface CodexDetectResult {
+  snapshot: CodexDetectSnapshot;
+  error: string | null;
 }
 
 /**
@@ -189,20 +209,44 @@ export function openVerificationUrl(url: string | null | undefined): boolean {
   }
 }
 
+/** The unavailable degrade snapshot (offline-only) — the safe default. */
+function degradedSnapshot(detail: string): CodexDetectSnapshot {
+  return {
+    available: false,
+    auth_file_present: false,
+    login_probe: 'missing',
+    codex_cli_missing: true,
+    origin: 'none',
+    detail,
+  };
+}
+
 /**
- * Read the codex detection snapshot (READ-ONLY). Outside Tauri (Vite preview)
- * returns an unavailable snapshot so the offline provider is the only one — the
- * safe default. Never throws.
+ * Read the codex detection snapshot (READ-ONLY) with an error channel
+ * (Slice 10 — AC-REFRESH-SURFACE). Always returns a usable snapshot:
+ *   - Outside Tauri (Vite preview): an unavailable snapshot, `error = null`
+ *     (this is expected, not a failure — the offline provider is the only one).
+ *   - Inside Tauri, on success: the real snapshot, `error = null`.
+ *   - Inside Tauri, when `invoke('codex_detect')` THROWS: still an unavailable
+ *     snapshot (graceful degrade), but `error` carries a Korean reason so the
+ *     UI can show that "다시 검출" actually ran and why it could not detect —
+ *     never a silent dead button. Never throws.
  */
-export async function detectCodex(): Promise<CodexDetectSnapshot> {
+export async function detectCodex(): Promise<CodexDetectResult> {
   const invoke = resolveInvoke();
   if (!invoke) {
-    return { available: false, auth_file_present: false, login_probe: 'missing', codex_cli_missing: true, origin: 'none' };
+    // Preview/no-shell: expected, not an error.
+    return { snapshot: degradedSnapshot('미리보기(셸 외부) · 검출 없음'), error: null };
   }
   try {
-    return await invoke<CodexDetectSnapshot>('codex_detect');
-  } catch {
-    return { available: false, auth_file_present: false, login_probe: 'missing', codex_cli_missing: true, origin: 'none' };
+    const snapshot = await invoke<CodexDetectSnapshot>('codex_detect');
+    return { snapshot, error: null };
+  } catch (e) {
+    const reason = e instanceof Error && e.message ? e.message : String(e);
+    return {
+      snapshot: degradedSnapshot(`검출 호출 실패: ${reason}`),
+      error: `codex 검출을 실행하지 못했습니다(${reason}). 복붙 모드로 모든 기능을 그대로 쓸 수 있습니다. 잠시 후 [다시 검출]을 눌러 주세요.`,
+    };
   }
 }
 

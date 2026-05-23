@@ -36,6 +36,7 @@ const INITIAL_DETECT: CodexDetectSnapshot = {
   login_probe: 'missing',
   codex_cli_missing: true,
   origin: 'none',
+  detail: '검출 전',
 };
 
 interface ModeState {
@@ -80,6 +81,14 @@ interface ModeState {
    */
   loginOutcomeKind: 'success' | 'attention' | null;
   /**
+   * Korean error reason from the LAST detect call (Slice 10 — AC-REFRESH-SURFACE).
+   * null when the call succeeded (or ran outside the Tauri shell, which is
+   * expected). Set when `invoke('codex_detect')` THREW, so the UI shows that
+   * "다시 검출" actually ran and why it could not detect — the button never looks
+   * dead. Carries guidance text only; never a token/secret.
+   */
+  detectError: string | null;
+  /**
    * True once a default (browser-callback) login attempt has finished WITHOUT
    * reaching `authed` this session (Slice 6 repair #2). The device-code fallback
    * affordance is emphasized when this is set — it is the exact case device-auth
@@ -100,14 +109,18 @@ export const modeStore = $state<ModeState>({
   loginOutcomeKind: null,
   defaultLoginUnfinished: false,
   alreadyAuthed: false,
+  detectError: null,
 });
 
-/** Re-run codex detection (read-only) and refresh the availability list. */
+/** Re-run codex detection (read-only) and refresh the availability list.
+ *  Slice 10 (AC-REFRESH-SURFACE): records a Korean `detectError` when the
+ *  underlying invoke threw, so "다시 검출" is never a silent dead button. */
 export async function refreshDetect(): Promise<void> {
   modeStore.refreshing = true;
   try {
-    const detect = await detectCodex();
-    applyDetect(detect);
+    const result = await detectCodex();
+    applyDetect(result.snapshot);
+    modeStore.detectError = result.error;
     // If the user had auto selected but it is no longer available, do NOT force
     // them off it in the store (so the toggle still shows their intent), but
     // `effectiveProviderId()` will collapse to offline at use time.
@@ -157,7 +170,9 @@ export async function loginWithChatGPT(deviceAuth = true): Promise<CodexLoginOut
   try {
     // DETECT-FIRST (AC-LOGIN-DETECT-FIRST): already authed → never spawn, never
     // open a browser; just enable auto mode + reassure the user.
-    const pre = await detectCodex();
+    const preResult = await detectCodex();
+    const pre = preResult.snapshot;
+    modeStore.detectError = preResult.error;
     if (pre.available) {
       applyDetect(pre);
       modeStore.loginMessage =

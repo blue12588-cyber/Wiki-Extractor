@@ -626,8 +626,114 @@ adding `has_seven_types` + `has_outline_classification` assertions; the Slice-5c
 fixed-literal guards + oauth_child proxy-origin branch guards). tauri build: see
 implementation report.
 
+## Slice 10 — codex detect distribution hardening (home fallback + XDG + npm-prefix + self-diag)
+
+**Status**: SUBSTANTIVE (Slice 10, run `run_20260523_000012_sw_llmwiki_slice10`).
+A distribution-hardening + bug-fix slice on top of Slice 9. No NEW harness-core
+*source file* was ported; it refines the existing codex-auth detection surface
+(adapted from the ima2 `codexDetect`/`oauthLauncher` pattern) and brings it to
+parity with ima2's `codexDetect.js` on the home/XDG path coverage. Recorded here
+per the contract's "every harness-core adaptation recorded … (UI/auth fix면 간략)"
+clause.
+
+### Upstream pin (Slice 10)
+
+- **upstream HEAD observed at Slice 10 start**: `94b8785f` (`harness-core` master).
+  A parallel track may advance this during the run; that is external and is NOT a
+  Slice-10 write — THIS run touches nothing under the harness-core working tree
+  (writes are confined to `D:\AI Project\llmwiki\**` + `runs/<run_id>/`).
+- **upstream branch**: `master`.
+
+### Live problem fixed
+
+On the test machine `~/.codex/auth.json` EXISTS (4381 bytes, mtime 11:27) and a
+Node mimic of the resolver returns `exists=true`, yet the bundled app reported
+`available=false` and "다시 검출" stayed dead. Root cause: in the packaged release
+runtime `dirs::home_dir()` could return `None`, so `external_dep_paths` never even
+BUILT the `~/.codex` / `~/.chatgpt-local` candidates — only the unset
+`$CODEX_HOME` / `$CHATGPT_LOCAL_HOME` env candidates were checked → no auth path →
+`available=false`.
+
+### What changed (Slice 10)
+
+- **AC-HOME-ROBUST**: `external_dep_paths::resolve_home_dir` is now a multi-step
+  fallback — `dirs::home_dir()` ?? `USERPROFILE` ?? (`HOMEDRIVE` + `HOMEPATH`). A
+  `None` from `dirs` no longer blinds the resolver; `C:\Users\USER` is still
+  resolved so `~/.codex/auth.json` is found. ALL OS-user-dir tokens stay inside
+  this one static-scan-exempt file (T1-static-scan: 0 violations across 105 files).
+  Fallback helpers (`home_from_userprofile`, `home_from_homedrive_homepath`) are
+  unit-tested by temp-setting the env vars (`dirs::home_dir()` cannot be forced to
+  `None` in a test).
+- **AC-AUTH-PATHS**: `auth_file_path` adds the XDG candidate
+  `~/.config/codex/auth.json` (matching ima2's `codexDetect.js`), keeping the
+  existing precedence ($CHATGPT_LOCAL_HOME → $CODEX_HOME → ~/.chatgpt-local →
+  ~/.codex → ~/.config/codex). Still a presence-stat only — contents never opened.
+- **AC-NPM-PREFIX-PROBE**: `codex_detect.rs::probe_login_status` order is now bare
+  `cmd /C codex…` candidates → npm-prefix absolute → WSL fallback. When all bare
+  candidates are `Missing` on Windows, `cmd /C npm prefix -g` (npm is on the machine
+  PATH) resolves the global bin dir, and the absolute `<prefix>\codex.cmd login
+  status` is probed via `cmd /C` — finding a custom-prefix codex (e.g.
+  `D:\AI Tools\npm-global`) regardless of a stale GUI PATH. The npm-prefix query
+  CAPTURES stdout (a path, not auth data; bounded + trimmed; the last drive-rooted
+  line is taken so a leading CWD warning cannot poison the path); the codex probe
+  built from it keeps stdio fully null (read-only). The only interpolated arg is the
+  npm-PRODUCED path — never user input. Empirically confirmed: Rust's
+  `Command::new("cmd").args(["/C", "<spaced path>", "login", "status"])` returns
+  exit 0 against the real `D:\AI Tools\npm-global\codex.cmd` (std quotes the spaced
+  path as one argv).
+- **AC-DETECT-SELFDIAG**: `CodexDetect` gains a `detail` string summarizing the
+  resolved home path + which signal won (`auth_file:<path>` / `probe_path` /
+  `probe_npm_prefix` / `probe_wsl` / `none:<reason>`). PATHS + labels ONLY — never
+  auth.json contents, never a token/secret. The home/auth path STRINGS come from
+  new `external_dep_paths` accessors (`resolved_home_display`, `auth_file_display`),
+  so `codex_detect.rs` names no OS-user-dir token in source. Surfaced in
+  `ModeToggle.svelte` as a small muted line (`검출 상세: …`) so a future detection
+  failure is diagnosable, not silent. A unit test asserts no detail string contains
+  any sentinel OS-user-dir token or a secret marker.
+- **AC-REFRESH-SURFACE**: `provider.ts::detectCodex` now returns
+  `{ snapshot, error }` (was a bare snapshot). On an `invoke('codex_detect')` throw
+  it still degrades to an unavailable snapshot but records a Korean `error`;
+  `modeStore` carries `detectError` and `ModeToggle` shows it, so "다시 검출" never
+  looks dead. Outside the Tauri shell (preview) `error` stays null (expected, not a
+  failure). The two degrade returns were consolidated into a `degradedSnapshot()`
+  helper that still defaults `origin: 'none'` (the Slice-9 `origin-defaults` fixture
+  assertion was EVOLVED in place to the helper shape — slice-supersedes-slice
+  precedent — behaviour preserved).
+
+### App-auth-write-0 preserved (HARD boundary, unchanged)
+
+Detection stays READ-ONLY: presence-stat (delegated to the SOLE AC-7-relaxed
+module) + `login status` probes only. The app writes ZERO to `auth.json` and never
+reads its CONTENTS — the new `detail` exposes only the auth-file PATH string, never
+its contents or any token. The Slice-8 shell-free `rundll32` URL opener is
+untouched. The new shell calls (`cmd /C npm prefix -g`, `cmd /C <prefix>\codex.cmd
+login status`) interpolate ONLY fixed compile-time literals + the npm-produced path
+— zero user-input injection surface.
+
+### What was NOT adapted (Slice 10)
+
+- A `dirs`-crate upgrade or a Win32 `SHGetKnownFolderPath` binding — the env-var
+  fallback (the same composition Windows uses) covers the bundled-`None` case with
+  no new dependency / lockfile churn.
+- Parsing/validating npm prefix beyond "last drive-rooted line" — a non-path output
+  yields `None` and the WSL fallback runs (graceful).
+- Bundling codex/Node — advanced users supply their own; the app detects + guides
+  (contract exclude; codex 강요 0).
+- API-key mode — `future` placeholder unchanged.
+
+New smoke coverage: the Slice-9 `origin-defaults` scenario was evolved in place;
+51 Rust lib tests pass (was 44 — +7: home fallback, XDG auth candidates, display
+helpers, detail-no-tokens, npm-prefix fixed-literals, npm-prefix parser, npm-prefix
+no-panic). Slice 9 (8, origin-defaults evolved) + 8 (8) + 5c (7) + 5b (10)
+regression + T1 static-scan (0 violations / 105 files) green; svelte-check 0 errors
+(1 pre-existing node-types warning); npm build green. Live D-class on this PC: bare
+`cmd /C codex login status` → "Logged in using ChatGPT" exit 0; `npm prefix -g` →
+`D:\AI Tools\npm-global`; `~/.codex/auth.json` present (mtime predates this run —
+app wrote 0). tauri build: see implementation report.
+
 ## Cross-references
 
+- `agreed_contract.json` (Slice 10, run `run_20260523_000012_sw_llmwiki_slice10`).
 - `agreed_contract.json` (Slice 9, run `run_20260523_000011_sw_llmwiki_slice9`).
 - `agreed_contract.json` (Slice 8, run `run_20260523_000010_sw_llmwiki_slice8`).
 - `agreed_contract.json` (Slice 6, run `run_20260523_000008_sw_llmwiki_slice6`).

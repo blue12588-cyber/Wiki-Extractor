@@ -128,8 +128,15 @@ async function originDefaults() {
     has_origin_serialize_test: /fn origin_serializes_snake_case/.test(rust) && /fn detect_serializes_origin_field/.test(rust),
     frontend_type: /export type CodexOrigin = 'windows' \| 'wsl' \| 'none'/.test(provider),
     snapshot_has_origin: /origin: CodexOrigin/.test(provider),
+    // Slice 10 evolved this in place (slice-supersedes-slice precedent): the two
+    // inline detectCodex degrade returns were consolidated into a single
+    // `degradedSnapshot()` helper that defaults `origin: 'none'`, and BOTH
+    // degrade paths (no-shell + invoke-throw catch) call it. The behaviour — a
+    // degrade snapshot that defaults origin to none — is preserved; assert the
+    // helper sets it AND both call sites route through the helper.
     frontend_defaults_none:
-      (provider.match(/origin: 'none'/g) || []).length >= 2, // both detectCodex fallbacks
+      /function degradedSnapshot\([\s\S]*?origin: 'none'/.test(provider) &&
+      (provider.match(/degradedSnapshot\(/g) || []).length >= 3, // def + 2 call sites
     store_initial_origin_none: /origin: 'none'/.test(store),
   };
   if (!report.rust_enum_present) return fail(report, 'CodexOrigin enum (windows/wsl/none) missing');

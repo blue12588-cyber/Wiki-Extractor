@@ -59,13 +59,42 @@
 //! Both probes are READ-ONLY (`login status` only) — zero `auth.json` writes.
 //! Both shell calls use FIXED-LITERAL args (`bin` is from the fixed candidate
 //! list, never user input) — zero injection surface.
+//!
+//! # Slice-10 distribution hardening
+//!
+//! Two resilience additions for the bundled (GUI-launched) runtime, where the
+//! inherited PATH can be STALE (it does not include a custom npm prefix like
+//! `D:\AI Tools\npm-global`):
+//!
+//!   - **npm-prefix absolute probe (AC-NPM-PREFIX-PROBE)**: when ALL bare
+//!     `cmd /C codex…` candidates yield `Missing` on Windows, we resolve the
+//!     npm global bin directory via `cmd /C npm prefix -g` (npm itself lives in
+//!     `C:\Program Files\nodejs`, which is on the MACHINE PATH, so it is
+//!     reachable even when the user PATH is stale), then probe the ABSOLUTE path
+//!     `<prefix>\codex.cmd login status`. This finds codex by absolute path
+//!     regardless of PATH. Order: bare `cmd /C` → npm-prefix absolute → WSL.
+//!     Reading `npm prefix` stdout requires CAPTURING output (not null stdout)
+//!     for that ONE probe — that is fine (it is a path, never auth data); it is
+//!     bounded by the same timeout discipline and the result is trimmed. The
+//!     codex probe built from the prefix keeps stdio fully null (read-only). The
+//!     only interpolated arg is the npm-PRODUCED prefix path — never user input.
+//!   - **self-diagnosis `detail` (AC-DETECT-SELFDIAG)**: the snapshot now carries
+//!     a `detail` summarizing the resolved home path + WHICH signal produced the
+//!     result (`auth_file:<path>` / `probe_path` / `probe_npm_prefix` /
+//!     `probe_wsl` / `none:<reason>`). It contains ONLY paths + signal labels —
+//!     NEVER auth.json contents, NEVER a token/secret. The home/auth path STRINGS
+//!     are obtained from `external_dep_paths` (the sole OS-user-dir module), so
+//!     this module names ZERO OS-user-dir token in its source (T1-static-scan
+//!     clean). The renderer surfaces it as a small muted line so a future
+//!     detection failure is diagnosable instead of silent.
 
+use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::external_dep_paths::auth_file_present;
+use crate::external_dep_paths::{auth_file_display, auth_file_present, resolved_home_display};
 
 /// Result of the `codex login status` probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -119,6 +148,27 @@ pub struct CodexDetect {
     /// or `none` (neither). The proxy spawn (Slice 9, `oauth_child`) branches on
     /// this so a WSL-only install is driven through `wsl.exe`.
     pub origin: CodexOrigin,
+    /// Self-diagnosis summary (Slice 10 — AC-DETECT-SELFDIAG). A short string
+    /// for the renderer's muted diagnostic line: the resolved home path + WHICH
+    /// signal produced the result, or WHY nothing was found. Contains ONLY paths
+    /// and signal labels — NEVER auth.json contents, NEVER a token/secret. It is
+    /// assembled from `external_dep_paths` path-string return values so this
+    /// module names no OS-user-dir token in source.
+    pub detail: String,
+}
+
+/// WHICH signal decided the detection (Slice 10 — AC-DETECT-SELFDIAG). Used only
+/// to label the self-diagnosis `detail`; carries no secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetectSignal {
+    /// The native `cmd /C codex login status` (PATH) probe found codex.
+    ProbePath,
+    /// The `cmd /C npm prefix -g` → absolute `<prefix>\codex.cmd` probe found it.
+    ProbeNpmPrefix,
+    /// The cross-boundary `wsl.exe -- codex login status` fallback found it.
+    ProbeWsl,
+    /// No probe found codex anywhere.
+    None,
 }
 
 /// Probe timeout. Short by design: a hung codex binary must not stall the auth
@@ -165,6 +215,115 @@ fn build_wsl_probe_command() -> Command {
     let mut c = Command::new("wsl.exe");
     c.args(["--", "codex", "login", "status"]);
     c
+}
+
+/// Build the npm-global-prefix query command: `cmd /C npm prefix -g`. FIXED-
+/// LITERAL args only. UNLIKE the read-only probes this one CAPTURES stdout (the
+/// prefix PATH, never auth data) so we can resolve the absolute codex path.
+/// Windows-only (the GUI stale-PATH case); npm itself is on the machine PATH.
+fn build_npm_prefix_command() -> Command {
+    let mut c = Command::new("cmd");
+    c.args(["/C", "npm", "prefix", "-g"]);
+    c
+}
+
+/// Build the ABSOLUTE-path codex probe: `cmd /C <prefix>\codex.cmd login status`.
+/// The ONLY non-literal value is `codex_cmd_path`, which is built from the
+/// npm-PRODUCED prefix (never user input) by joining the fixed `codex.cmd`
+/// filename. Read-only (`login status`), stdio nulled by the runner.
+fn build_npm_prefix_probe_command(codex_cmd_path: &str) -> Command {
+    let mut c = Command::new("cmd");
+    c.args(["/C", codex_cmd_path, "login", "status"]);
+    c
+}
+
+/// Run `cmd /C npm prefix -g` with a bounded wait and return the resolved npm
+/// global prefix PATH (trimmed). Returns `None` when npm is absent / the call
+/// times out / no path-like line is produced. Captures stdout (the prefix is a
+/// path, not auth data); a hung npm cannot stall the poll (bounded kill).
+///
+/// `npm prefix -g` may print a benign leading warning line when launched from an
+/// unusual CWD (e.g. a UNC path → "UNC paths are not supported. Defaulting to
+/// Windows directory."). We therefore take the LAST non-empty, drive-rooted line
+/// of stdout as the prefix, so such a warning never poisons the path.
+fn resolve_npm_global_prefix() -> Option<String> {
+    let spawned = build_npm_prefix_command()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut out = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    // Bounded read: the prefix is a single short path line.
+                    let _ = stdout.read_to_string(&mut out);
+                }
+                return last_drive_rooted_line(&out);
+            }
+            Ok(None) => {
+                if start.elapsed() >= PROBE_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Pick the last non-empty line of `npm prefix -g` stdout that looks like a
+/// Windows drive-rooted absolute path (e.g. `D:\AI Tools\npm-global`). Returns
+/// the trimmed path, or `None` when no such line exists. This skips a leading
+/// CWD warning while never accepting a non-path line.
+fn last_drive_rooted_line(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .filter(|l| is_drive_rooted(l))
+        .last()
+        .map(|s| s.to_string())
+}
+
+/// True iff `s` begins with a Windows drive letter root like `C:\` or `D:/`.
+fn is_drive_rooted(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b[2] == b'\\' || b[2] == b'/')
+}
+
+/// AC-NPM-PREFIX-PROBE: resolve the npm global prefix and probe the absolute
+/// `<prefix>\codex.cmd login status`. Returns `Some(probe)` when the prefix +
+/// codex.cmd resolve and the probe ran (`Authed`/`Unauthed`), or `None` when the
+/// prefix could not be resolved / `codex.cmd` is not there / the probe failed.
+/// Read-only; bounded; the only interpolated arg is the npm-produced path.
+fn probe_login_status_npm_prefix() -> Option<LoginProbe> {
+    let prefix = resolve_npm_global_prefix()?;
+    // Join the fixed `codex.cmd` filename onto the npm-produced prefix.
+    let codex_cmd = std::path::Path::new(&prefix).join("codex.cmd");
+    // If the file is not there, skip (let the WSL fallback try) — avoids a
+    // pointless cmd spawn.
+    if !codex_cmd.exists() {
+        return None;
+    }
+    let codex_cmd_str = codex_cmd.to_string_lossy().to_string();
+    run_probe_command(build_npm_prefix_probe_command(&codex_cmd_str))
 }
 
 /// Spawn an already-built probe `Command` (stdio fully null → READ-ONLY) and
@@ -248,47 +407,99 @@ pub fn detect_codex() -> CodexDetect {
     let file_present = auth_file_present();
     let native = probe_login_status();
 
-    // Resolve the effective probe + origin. The native probe wins whenever it
-    // found codex at all (Authed OR Unauthed-but-present). Only a native
-    // `Missing` on Windows triggers the WSL fallback.
-    let (probe, origin) = match native {
+    // Resolve the effective probe + origin + signal. The native (PATH) probe wins
+    // whenever it found codex at all (Authed OR Unauthed-but-present). Only a
+    // native `Missing` on Windows triggers the Slice-10 npm-prefix absolute probe,
+    // then (if that also fails) the Slice-9 WSL fallback.
+    // Order: bare cmd /C candidates → npm-prefix absolute → WSL fallback.
+    let (probe, origin, signal) = match native {
         LoginProbe::Authed | LoginProbe::Unauthed => {
             // Native codex present. On Windows the origin is `windows`; on a
             // *nix host (where there is no Windows/WSL split) we also label it
             // `windows` — i.e. "the native, authoritative environment" — to keep
             // the enum small; non-Windows never reaches the `wsl` branch.
-            (native, CodexOrigin::Windows)
+            (native, CodexOrigin::Windows, DetectSignal::ProbePath)
         }
         LoginProbe::Missing => {
             if cfg!(windows) {
-                // Windows: codex not found natively → try the WSL fallback.
-                match probe_login_status_wsl() {
-                    LoginProbe::Authed => (LoginProbe::Authed, CodexOrigin::Wsl),
-                    LoginProbe::Unauthed => (LoginProbe::Unauthed, CodexOrigin::Wsl),
-                    LoginProbe::Missing => (LoginProbe::Missing, CodexOrigin::None),
+                // Windows: codex not found on the (possibly stale) PATH. First
+                // try the npm-prefix absolute probe (AC-NPM-PREFIX-PROBE), which
+                // finds a custom-prefix codex regardless of PATH.
+                match probe_login_status_npm_prefix() {
+                    Some(LoginProbe::Authed) => {
+                        (LoginProbe::Authed, CodexOrigin::Windows, DetectSignal::ProbeNpmPrefix)
+                    }
+                    Some(LoginProbe::Unauthed) => {
+                        (LoginProbe::Unauthed, CodexOrigin::Windows, DetectSignal::ProbeNpmPrefix)
+                    }
+                    // npm prefix didn't resolve codex → cross-boundary WSL.
+                    _ => match probe_login_status_wsl() {
+                        LoginProbe::Authed => (LoginProbe::Authed, CodexOrigin::Wsl, DetectSignal::ProbeWsl),
+                        LoginProbe::Unauthed => (LoginProbe::Unauthed, CodexOrigin::Wsl, DetectSignal::ProbeWsl),
+                        LoginProbe::Missing => (LoginProbe::Missing, CodexOrigin::None, DetectSignal::None),
+                    },
                 }
             } else {
                 // Non-Windows: the native probe is authoritative; no WSL split.
-                (LoginProbe::Missing, CodexOrigin::None)
+                (LoginProbe::Missing, CodexOrigin::None, DetectSignal::None)
             }
         }
     };
 
-    // `codex_cli_missing` is true only when codex was found NOWHERE (native +
-    // WSL), so the renderer's install guidance is shown only in the genuine
-    // not-installed case.
+    // `codex_cli_missing` is true only when codex was found NOWHERE (PATH +
+    // npm-prefix + WSL), so the renderer's install guidance is shown only in the
+    // genuine not-installed case.
     let cli_missing = probe == LoginProbe::Missing;
     // Available when EITHER signal is positive: a file present (precedence path)
     // OR an authed probe (covers keyring-only installs with no auth.json, and a
-    // WSL-detected install).
+    // WSL/npm-prefix-detected install).
     let available = file_present || probe == LoginProbe::Authed;
+    let detail = build_detail(file_present, available, signal);
     CodexDetect {
         available,
         auth_file_present: file_present,
         login_probe: probe,
         codex_cli_missing: cli_missing,
         origin,
+        detail,
     }
+}
+
+/// Assemble the self-diagnosis `detail` string (Slice 10 — AC-DETECT-SELFDIAG).
+/// PATHS + signal labels ONLY — never auth.json contents, never a secret. The
+/// home/auth path strings come from `external_dep_paths` (the sole OS-user-dir
+/// module), so this function names no OS-user-dir token in source.
+///
+/// Shape: `home=<home-or-?> · <signal>` where `<signal>` is one of:
+///   - `auth_file:<path>` (the auth.json presence-stat hit — path only)
+///   - `probe_path` / `probe_npm_prefix` / `probe_wsl` (which probe authed)
+///   - `none:<reason>` (`home unresolved` / `codex not found on PATH/npm-prefix/WSL`)
+fn build_detail(file_present: bool, available: bool, signal: DetectSignal) -> String {
+    // Resolved home path string (a path, never a secret). `?` when unresolved.
+    let home = resolved_home_display().unwrap_or_else(|| "?".to_string());
+
+    let signal_part = if available && file_present {
+        // The auth-file presence-stat is the precedence signal. Show its PATH
+        // (path only — the file is never opened/read).
+        match auth_file_display() {
+            Some(p) => format!("auth_file:{p}"),
+            None => "auth_file".to_string(),
+        }
+    } else if available {
+        // Available via a probe (no auth.json on disk — keyring-only install).
+        match signal {
+            DetectSignal::ProbePath => "probe_path".to_string(),
+            DetectSignal::ProbeNpmPrefix => "probe_npm_prefix".to_string(),
+            DetectSignal::ProbeWsl => "probe_wsl".to_string(),
+            DetectSignal::None => "probe".to_string(),
+        }
+    } else if resolved_home_display().is_none() {
+        "none:home unresolved".to_string()
+    } else {
+        "none:codex not found on PATH/npm-prefix/WSL".to_string()
+    };
+
+    format!("home={home} · {signal_part}")
 }
 
 /// Tauri command: codex auth detection for the login tab + provider layer.
@@ -311,6 +522,7 @@ mod tests {
             login_probe: LoginProbe::Missing,
             codex_cli_missing: true,
             origin: CodexOrigin::None,
+            detail: build_detail(false, false, DetectSignal::None),
         };
         assert!(d.codex_cli_missing);
         assert!(!d.available);
@@ -420,8 +632,116 @@ mod tests {
             login_probe: LoginProbe::Authed,
             codex_cli_missing: false,
             origin: CodexOrigin::Wsl,
+            detail: build_detail(false, true, DetectSignal::ProbeWsl),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"origin\":\"wsl\""), "origin must serialize snake_case in the snapshot");
+        assert!(json.contains("\"detail\":"), "detail must serialize in the snapshot");
+    }
+
+    // AC-DETECT-SELFDIAG: the detail field carries ONLY paths + signal labels and
+    // NEVER an OS-user-dir token literal or auth contents. We assert the four
+    // signal shapes and that the assembled string never contains a forbidden
+    // OS-user-dir token (pulled from the Rust sentinel — the single authoritative
+    // pattern). The home path VALUE is allowed; token IDENTIFIERS are not.
+    #[test]
+    fn detail_is_paths_and_labels_no_tokens() {
+        // The four signal shapes.
+        let auth_hit = build_detail(true, true, DetectSignal::ProbePath);
+        assert!(auth_hit.starts_with("home="), "detail must lead with home=");
+        // available + file_present ⇒ the auth_file: label (path only).
+        assert!(auth_hit.contains("auth_file"), "file-present detail must label auth_file");
+
+        let path_hit = build_detail(false, true, DetectSignal::ProbePath);
+        assert!(path_hit.contains("probe_path"));
+        let npm_hit = build_detail(false, true, DetectSignal::ProbeNpmPrefix);
+        assert!(npm_hit.contains("probe_npm_prefix"));
+        let wsl_hit = build_detail(false, true, DetectSignal::ProbeWsl);
+        assert!(wsl_hit.contains("probe_wsl"));
+        let none_hit = build_detail(false, false, DetectSignal::None);
+        assert!(none_hit.contains("none:"), "unavailable detail must carry a none: reason");
+
+        // No forbidden OS-user-dir token identifier appears in ANY detail string.
+        // (The home path VALUE like `C:\Users\...` is fine; the banned thing is
+        // the token identifiers `USERPROFILE`/`home_dir`/etc. as text.)
+        let sentinel = crate::external_dep_paths::forbidden_pattern_sentinel();
+        for tok in sentinel.split('|') {
+            for d in [&auth_hit, &path_hit, &npm_hit, &wsl_hit, &none_hit] {
+                assert!(
+                    !d.contains(tok),
+                    "detail string leaked an OS-user-dir token `{tok}`: {d}"
+                );
+            }
+        }
+        // And never the literal `auth.json` CONTENTS marker — detail shows a path,
+        // not file contents. (We can't read contents anyway; this pins intent.)
+        for d in [&auth_hit, &path_hit, &npm_hit, &wsl_hit, &none_hit] {
+            assert!(!d.contains("access_token") && !d.contains("Bearer"), "detail leaked a secret marker: {d}");
+        }
+    }
+
+    // AC-NPM-PREFIX-PROBE: the new shell calls use FIXED-LITERAL args; the only
+    // interpolated value is the npm-PRODUCED prefix path (never user input). This
+    // is a source guard mirroring `probe_args_are_fixed_literals`.
+    #[test]
+    fn npm_prefix_probe_args_are_fixed_literals() {
+        let src = include_str!("codex_detect.rs");
+        // The prefix query is `cmd /C npm prefix -g` with fixed literals.
+        assert!(
+            src.contains("Command::new(\"cmd\")") && src.contains("\"/C\", \"npm\", \"prefix\", \"-g\""),
+            "npm prefix query must be `cmd /C npm prefix -g` with fixed literals"
+        );
+        // The absolute codex probe is `cmd /C <prefix>\\codex.cmd login status`;
+        // the ONLY interpolated arg is `codex_cmd_path` (the npm-produced path).
+        assert!(
+            src.contains("\"/C\", codex_cmd_path, \"login\", \"status\""),
+            "npm-prefix codex probe must be `cmd /C <prefix-path> login status`"
+        );
+        // No format!/concatenation builds a probe arg (injection guard). Needles
+        // assembled at runtime so this test's own source does not self-trip.
+        let fmt = "format!";
+        let arg_fmt = format!("c.arg({fmt}");
+        let args_fmt = format!("c.args([{fmt}");
+        assert!(
+            !src.contains(&arg_fmt) && !src.contains(&args_fmt),
+            "probe args must be fixed literals (no format-built args)"
+        );
+        // The npm-prefix probe runs ONLY when the native PATH probe is Missing on
+        // Windows (the order: bare cmd /C → npm-prefix → WSL).
+        assert!(
+            src.contains("probe_login_status_npm_prefix()"),
+            "detect must call the npm-prefix probe"
+        );
+    }
+
+    // The npm-prefix stdout parser tolerates a leading CWD warning and takes the
+    // last drive-rooted line as the prefix.
+    #[test]
+    fn npm_prefix_parser_skips_warning_takes_path() {
+        let noisy = "'\\\\wsl.localhost\\...' \r\nCMD.EXE was started with the above path...\r\nUNC paths are not supported.  Defaulting to Windows directory.\r\nD:\\AI Tools\\npm-global\r\n";
+        assert_eq!(
+            last_drive_rooted_line(noisy).as_deref(),
+            Some("D:\\AI Tools\\npm-global")
+        );
+        // A clean single-line output.
+        assert_eq!(
+            last_drive_rooted_line("C:\\Program Files\\nodejs\r\n").as_deref(),
+            Some("C:\\Program Files\\nodejs")
+        );
+        // No drive-rooted line ⇒ None (never accept a non-path line as a prefix).
+        assert_eq!(last_drive_rooted_line("npm: command not found\n"), None);
+        assert_eq!(last_drive_rooted_line(""), None);
+        // is_drive_rooted basics.
+        assert!(is_drive_rooted("C:\\x"));
+        assert!(is_drive_rooted("d:/y"));
+        assert!(!is_drive_rooted("/usr/local"));
+        assert!(!is_drive_rooted("C:"));
+    }
+
+    #[test]
+    fn npm_prefix_probe_does_not_panic() {
+        // On any host this must be bounded + non-panicking (returns None when npm
+        // or codex.cmd is absent).
+        let _ = probe_login_status_npm_prefix();
     }
 }

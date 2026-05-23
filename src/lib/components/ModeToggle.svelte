@@ -96,6 +96,21 @@
     </button>
   </div>
 
+  <!-- 검출 자가진단(Slice 10 · AC-DETECT-SELFDIAG): 잡은 home 경로 + 어느 신호로
+       판정됐는지(또는 못 잡은 이유)를 작은 muted 줄로 보여 준다. 경로·신호 라벨만
+       표시하며 auth.json 내용이나 토큰은 절대 담기지 않는다. 검출이 다시 깜깜이로
+       실패하는 일을 막기 위한 진단 보조 줄. -->
+  {#if modeStore.detect.detail}
+    <p class="detect-detail" role="note">검출 상세: <code>{modeStore.detect.detail}</code></p>
+  {/if}
+
+  <!-- 검출 에러 표면화(Slice 10 · AC-REFRESH-SURFACE): invoke 호출 자체가 실패하면
+       조용히 degrade만 하지 않고 한글 사유를 보여 준다 → [다시 검출]이 무반응처럼
+       보이지 않는다. -->
+  {#if modeStore.detectError}
+    <p class="detect-error" role="status">{modeStore.detectError}</p>
+  {/if}
+
   <div class="login-row">
     <button
       type="button"
@@ -267,6 +282,30 @@
   .detect-badge[data-state='ok'] { color: var(--success-moss); border-color: var(--success-moss); }
   .detect-badge[data-state='na'] { color: var(--text-secondary); border-style: dashed; }
   .detect-sub { font-size: 0.75rem; color: var(--text-secondary); }
+
+  /* 검출 자가진단 줄(Slice 10). 작고 차분한 muted 톤. 경로·신호 라벨만. 토큰만 사용. */
+  .detect-detail {
+    margin: 0;
+    font-size: 0.6875rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    opacity: 0.85;
+    word-break: break-all;
+  }
+  .detect-detail code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  /* 검출 에러 줄(Slice 10). 텍스트 + 좌측 강세선으로 색에만 의존하지 않는다. */
+  .detect-error {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+    padding: var(--space-xs) var(--space-md);
+    border-left: 3px solid var(--danger-rust);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-tight);
+  }
 
   /* [ChatGPT로 로그인] 버튼 블록 (Slice 6). 토큰만 사용. */
   .login-row {
