@@ -47,7 +47,7 @@ interface OAuthChildSnapshot {
  * on the Rust side (a Ready proxy is reused). Never throws; on any error it
  * resolves to a `degraded` snapshot so the caller degrades gracefully.
  */
-async function ensureProxy(): Promise<OAuthChildSnapshot> {
+export async function ensureProxy(): Promise<OAuthChildSnapshot> {
   const invoke = resolveInvoke();
   if (!invoke) {
     return { state: 'degraded', reason: 'Tauri 셸 외부(미리보기)에서는 자동 모드를 쓸 수 없습니다.' };

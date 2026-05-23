@@ -31,7 +31,9 @@ import {
   type CandidateMapping,
 } from '$lib/wiki/wikiBuilder';
 import type { WikiEntry } from '$lib/wiki/wikiTypes';
-import { llmExtract, llmClassify, llmTranslate } from '$lib/llm/llmClient';
+import { llmExtract, llmClassify, llmTranslate, llmConfig } from '$lib/llm/llmClient';
+import { autoModeActive } from '$lib/llm/modeStore.svelte';
+import { ensureProxy } from '$lib/llm/codexProvider';
 import { runCandidateEngine, type CandidateDecision } from '$lib/candidate/candidateEngine';
 import { outlineKeywords } from '$lib/candidate/candidateEngine';
 import type { Chunk } from '$lib/chunk/chunker';
@@ -183,6 +185,20 @@ export async function buildWiki() {
   pipeline.busy = true;
   pipeline.notice = null;
   try {
+    // 자동 LLM 모드면 LLM 호출 전에 openai-oauth 프록시를 띄운다(없으면 시작; npx -y로
+    // 첫 실행 시 자동 설치). 프록시가 준비돼야 llm_extract/llm_classify가 실제 LLM
+    // (codex 토큰)에 도달한다. 준비 실패 시 아래 호출들이 그대로 오프라인 결정적
+    // 추출로 graceful degrade 하므로 앱은 계속 동작한다(강제 정지 없음).
+    if (autoModeActive()) {
+      const proxy = await ensureProxy();
+      pipeline.llmCfg = await llmConfig(); // "LLM 연결됨/미연결" 표시 갱신
+      if (proxy.state !== 'ready') {
+        pipeline.notice =
+          proxy.reason ??
+          '자동 LLM 프록시가 준비되지 않아 오프라인 추출로 진행합니다(앱은 계속 동작합니다).';
+      }
+    }
+
     let candidates: CandidateItem[] = bundle.candidate_items;
     let usedLlmExtract = false;
 

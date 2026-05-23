@@ -164,22 +164,25 @@ fn already_ready() -> Option<(u16, String)> {
 ///   - any origin on a non-Windows host → bare `npx openai-oauth --port <P>`.
 fn build_proxy_command(origin: CodexOrigin, port: u16) -> Command {
     let port_arg = port.to_string();
+    // `-y` lets npx install `openai-oauth` non-interactively on first run (the
+    // package is not pre-installed and the spawn has no TTY to answer a prompt).
+    // All args remain fixed literals plus the numeric port — no user input.
     if cfg!(windows) {
         if origin == CodexOrigin::Wsl {
             // Cross-boundary: run the proxy inside WSL. Fixed-literal args.
             let mut c = Command::new("wsl.exe");
-            c.args(["--", "npx", "openai-oauth", "--port", &port_arg]);
+            c.args(["--", "npx", "-y", "openai-oauth", "--port", &port_arg]);
             c
         } else {
             // Windows-native: `npx` is a `.cmd` shim → route through cmd.exe.
             let mut c = Command::new("cmd");
-            c.args(["/C", "npx", "openai-oauth", "--port", &port_arg]);
+            c.args(["/C", "npx", "-y", "openai-oauth", "--port", &port_arg]);
             c
         }
     } else {
         // Non-Windows: no WSL split; spawn npx directly.
         let mut c = Command::new("npx");
-        c.args(["openai-oauth", "--port", &port_arg]);
+        c.args(["-y", "openai-oauth", "--port", &port_arg]);
         c
     }
 }
@@ -433,13 +436,13 @@ mod tests {
         // WSL cross-boundary spawn.
         assert!(
             src.contains("Command::new(\"wsl.exe\")")
-                && src.contains("\"--\", \"npx\", \"openai-oauth\", \"--port\", &port_arg"),
-            "WSL proxy spawn must be `wsl.exe -- npx openai-oauth --port <P>` with fixed literals"
+                && src.contains("\"--\", \"npx\", \"-y\", \"openai-oauth\", \"--port\", &port_arg"),
+            "WSL proxy spawn must be `wsl.exe -- npx -y openai-oauth --port <P>` with fixed literals"
         );
         // Windows-native spawn (cmd shim).
         assert!(
             src.contains("Command::new(\"cmd\")")
-                && src.contains("\"/C\", \"npx\", \"openai-oauth\", \"--port\", &port_arg"),
+                && src.contains("\"/C\", \"npx\", \"-y\", \"openai-oauth\", \"--port\", &port_arg"),
             "Windows-native proxy spawn must route `npx` through `cmd /C` with fixed literals"
         );
         // The spawn branches on the detected origin.
