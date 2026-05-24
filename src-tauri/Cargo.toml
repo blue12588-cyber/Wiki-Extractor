@@ -38,7 +38,7 @@ base64 = "0.22"
 # Loopback endpoint is plain HTTP (http://127.0.0.1:<port>/v1) so no TLS
 # backend is required; `json` is the only feature we add. This matches the
 # already-locked reqwest 0.13.3 resolution and avoids lockfile churn.
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "brotli", "deflate", "zstd"] }
 # Slice 5c AC-OAUTH-PROXY: the openai-oauth child is spawned via tokio's async
 # process API (ima2 oauthLauncher pattern). tokio is already resolved as a
 # transitive tauri dependency (Cargo.lock pins 1.52.3); declaring it directly

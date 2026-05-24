@@ -23,6 +23,7 @@
  */
 
 import type { Chunk } from '../chunk/chunker';
+import { structuralReasonForCandidate } from '../candidate/structuralFilter';
 import type { WikiClaim, WikiEntry } from '../wiki/wikiTypes';
 import type { ValidatedCandidate } from './responseValidator';
 
@@ -54,13 +55,17 @@ function claimsFor(
         `원문 복원 실패: chunk_id "${ev.chunk_id}" 의 원문 청크 텍스트를 찾을 수 없어 가져오기를 거부합니다(모델 인용을 원문으로 대체하지 않음).`,
       );
     }
-    // original_text = verbatim source (chunk text). Never the ChatGPT quote.
-    const original_text = chunk.text;
+    // Prefer the exact model-cited quote only when it is verifiably a verbatim
+    // slice of the real chunk. Otherwise fall back to the whole real chunk.
+    // Either way original_text comes from source text, never from paraphrase.
+    const quote = ev.quote.trim();
+    const original_text = quote && chunk.text.includes(quote) ? quote : chunk.text;
     return {
       claim_id: `${cand.index}-${i}-${ev.chunk_id}`,
       statement: cand.title,
-      // Catholic-terminology Korean (ChatGPT summary_ko) — the translated layer.
-      translated_text: cand.summary_ko,
+      // Catholic-terminology Korean translation of the evidence passage when
+      // supplied; summary_ko remains a fallback for older/manual responses.
+      translated_text: ev.translation_ko || cand.summary_ko,
       // Preserved verbatim source.
       original_text,
       // Evidence locators bind to the real chunk_id.
@@ -94,6 +99,10 @@ export function buildEntryFromValidated(
 ): WikiEntry {
   if (!cand.importable) {
     throw new Error('가져올 수 없는 후보입니다(검증 실패). 검증을 통과한 후보만 가져올 수 있습니다.');
+  }
+  const structuralReason = structuralReasonForCandidate(cand);
+  if (structuralReason) {
+    throw new Error(`${structuralReason} 구조 정보는 위키 항목으로 저장하지 않습니다.`);
   }
   const now = isoNow(opts.now);
   const chunksById = new Map(opts.chunks.map((c) => [c.chunk_id, c]));

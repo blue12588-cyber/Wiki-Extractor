@@ -127,15 +127,16 @@
       </span>
       <span>{modeStore.loggingIn ? '로그인 확인 중…' : 'ChatGPT로 로그인'}</span>
     </button>
-    <span class="login-hint">
-      버튼을 누르면 앱이 먼저 로그인 상태를 확인합니다. <strong>이미 로그인돼
-      있으면</strong> 다시 로그인할 필요가 없어 브라우저가 열리지 않고 곧바로 자동
-      모드를 쓸 수 있습니다(정상입니다). <strong>아직 로그인 전이면</strong> 화면에
-      뜬 주소를 앱이 자동으로 브라우저에서 열고, 짧은 코드를 보여 줍니다. 그 코드를
-      브라우저에 입력해 ChatGPT 계정으로 로그인하면 됩니다(아이디·비밀번호는 앱에
-      입력하지 않습니다). 로그인은 codex가 처리하며, 앱은 인증 파일을 직접 만들거나
-      고치지 않습니다. 로그인하지 않아도 복붙 모드로 모든 기능을 그대로 쓸 수 있습니다.
-    </span>
+    <div class="login-hint" role="note">
+      <strong class="hint-title">이 버튼이 하는 일</strong>
+      <ul>
+        <li>먼저 이 PC에 Codex 로그인이 되어 있는지 읽기 전용으로 확인합니다.</li>
+        <li>이미 로그인되어 있으면 브라우저를 열지 않고 자동 모드만 켭니다.</li>
+        <li>로그인이 필요하면 ChatGPT 공식 로그인 페이지와 확인 코드를 보여 줍니다.</li>
+        <li>앱은 아이디·비밀번호를 받지 않고, 인증 파일을 만들거나 고치지 않습니다.</li>
+      </ul>
+      <p>Codex CLI가 아직 없다면 아래 안내대로 먼저 설치해야 합니다. 자동 모드가 막혀도 복붙 모드는 그대로 사용할 수 있습니다.</p>
+    </div>
 
     <!-- 보조 경로: 코드 입력 방식이 막힌 드문 환경을 위한 브라우저 콜백(legacy) 흐름.
          기본(코드 입력) 흐름이 완료되지 못하면 강조해서 보여 준다. -->
@@ -237,13 +238,18 @@
   </fieldset>
 
   {#if modeStore.detect.codex_cli_missing}
-    <p class="guide" role="note">
-      자동 LLM 모드는 codex CLI를 직접 설치·로그인한 고급 사용자용입니다. 설치를
-      강요하지 않으며, 설치하지 않아도 기본 <strong>복붙 모드</strong>로 모든 기능을
-      그대로 사용할 수 있습니다. 원한다면 직접
-      <code>npm i -g @openai/codex</code> 후 <code>codex login</code>으로 로그인한 뒤
-      [다시 검출]을 누르세요.
-    </p>
+    <div class="guide" role="note">
+      <strong>Codex CLI가 아직 없습니다.</strong>
+      <p>
+        앱은 Codex를 자동 설치하지 않습니다. 자동 LLM 모드를 쓰려면 PowerShell에서
+        아래 순서로 한 번만 직접 설정한 뒤 [다시 검출]을 누르세요.
+      </p>
+      <ol>
+        <li><code>npm i -g @openai/codex</code></li>
+        <li><code>codex login</code></li>
+      </ol>
+      <p>설치하지 않아도 기본 <strong>복붙 모드</strong>로 모든 기능을 그대로 사용할 수 있습니다.</p>
+    </div>
   {/if}
 </section>
 
@@ -338,9 +344,31 @@
     color: currentColor;
   }
   .login-hint {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    padding: var(--space-sm) var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-tight);
+    background: var(--surface-sunken);
     font-size: 0.75rem;
     color: var(--text-secondary);
     line-height: 1.55;
+  }
+  .hint-title {
+    font-family: var(--heading-family);
+    font-size: 0.75rem;
+    color: var(--text-primary);
+  }
+  .login-hint ul {
+    margin: 0;
+    padding-left: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .login-hint p {
+    margin: 0;
   }
   /* 보조 경로(코드 입력 방식) 버튼 블록 (Slice 6 보수 #2). 기본 로그인보다 한 단계
      낮은 시각 위계의 보조 affordance. 토큰만 사용. */
@@ -526,14 +554,32 @@
   }
 
   .guide {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
     margin: 0;
     font-size: 0.8125rem;
     color: var(--text-secondary);
     line-height: 1.55;
-    padding: var(--space-sm) var(--space-md);
-    border-left: 3px solid var(--border-subtle);
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--accent-oxblood);
     background: var(--surface-sunken);
     border-radius: var(--radius-tight);
+  }
+  .guide strong {
+    font-family: var(--heading-family);
+    color: var(--text-primary);
+  }
+  .guide p {
+    margin: 0;
+  }
+  .guide ol {
+    margin: var(--space-xs) 0;
+    padding-left: 1.4rem;
+  }
+  .guide li + li {
+    margin-top: var(--space-xs);
   }
 
   .link-btn {

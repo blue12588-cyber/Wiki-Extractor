@@ -62,6 +62,22 @@
       내용이 그 목차에 맞춰 분류되어 훨씬 깔끔한 위키가 됩니다. 순서는 아래와 같아요:
       <span class="outline-flow">목차 입력 → 원서 넣기 → 후보 추출 → ChatGPT 정리 → 위키 검토·저장</span>
     </p>
+
+    <div class="mode-guide" role="note" aria-label="복붙 모드와 자동 모드 차이">
+      <h3 class="mode-guide-title">먼저 이렇게 고르면 됩니다</h3>
+      <div class="mode-guide-grid">
+        <section class="mode-guide-card">
+          <h4>처음 쓰는 분</h4>
+          <strong>복붙 모드</strong>
+          <p>설치 없이 시작합니다. 앱이 프롬프트를 만들어 주면 ChatGPT 사이트에 직접 붙여넣고, 답을 다시 앱에 붙여넣습니다.</p>
+        </section>
+        <section class="mode-guide-card">
+          <h4>자동으로 돌리고 싶은 분</h4>
+          <strong>자동 LLM 모드</strong>
+          <p>Codex CLI를 직접 설치하고 자기 ChatGPT 계정으로 로그인해야 합니다. 앱은 설치를 대신하지 않고, 인증 파일도 만들지 않습니다.</p>
+        </section>
+      </div>
+    </div>
   </header>
 
   <ol class="step-list" role="list">
@@ -95,15 +111,18 @@
             <div class="branch" data-kind="auto">
               <h4 class="branch-title">방법 B · 자동으로 처리 <span class="branch-tag">선택 · 로그인하면</span></h4>
               <p class="branch-note">
-                [로그인] 화면에서 <strong>[ChatGPT로 로그인]</strong> 버튼을 눌러
-                내 ChatGPT 계정으로 한 번 로그인해 두면, 위 복사·붙여넣기 과정을
-                앱이 알아서 대신 해 줍니다. 버튼을 누르면 앱이 먼저 로그인 상태를
-                확인하고, <strong>이미 로그인돼 있으면</strong> 브라우저를 열지 않고
-                바로 자동 모드를 켭니다(정상이에요). 아직 로그인 전이면 로그인
-                페이지를 자동으로 열고 <strong>짧은 코드</strong>를 화면에 크게 보여
-                주니, 그 코드를 브라우저에 입력하면 됩니다. 아이디·비밀번호는 앱에
-                입력하지 않습니다.
+                <strong>Codex CLI를 설치한 뒤</strong> [로그인] 화면에서
+                <strong>[ChatGPT로 로그인]</strong> 버튼을 누르면, 위 복사·붙여넣기
+                과정을 앱이 자동으로 처리할 수 있습니다. 버튼을 누르면 앱이 먼저
+                로그인 상태를 확인하고, <strong>이미 로그인돼 있으면</strong> 브라우저를
+                열지 않고 바로 자동 모드를 켭니다(정상이에요). 아직 로그인 전이면
+                로그인 페이지와 <strong>짧은 코드</strong>를 보여 줍니다.
               </p>
+              <ul class="branch-checks" aria-label="자동 모드에서 앱이 하지 않는 일">
+                <li>Codex CLI 설치는 사용자가 직접 합니다.</li>
+                <li>각 사용자 PC에서 자기 ChatGPT 계정으로 로그인합니다.</li>
+                <li>아이디·비밀번호와 인증 파일은 앱이 만들거나 가져가지 않습니다.</li>
+              </ul>
               <p class="branch-note">
                 로그인 페이지가 자동으로 열리지 않는 환경(회사·학교 방화벽, 원격 접속
                 등)에서도, 화면에 뜬 주소 옆 <strong>[주소 열기]</strong> 버튼이나
@@ -134,10 +153,28 @@
       위 <strong>방법 A(복사·붙여넣기)</strong>만으로도 모든 기능을 그대로 쓸 수
       있습니다. 매번 복사·붙여넣기 하기가 번거롭다면, 아래 설정을
       <strong>한 번만</strong> 해 두면 앱이 알아서 ChatGPT에게 물어보고 결과를
-      받아오는 <strong>자동 모드</strong>를 켤 수 있어요. 내 ChatGPT 계정(무료 또는
-      구독)으로 동작하며, 사용량도 내 계정 기준입니다. 처음 쓰는 분께는 꼭 필요한
-      과정은 아니니, 자동이 필요할 때 시도해 보세요.
+      받아오는 <strong>자동 모드</strong>를 켤 수 있어요. 단, Codex 설치와 로그인은
+      사용자가 직접 합니다. 자동 모드는 내 ChatGPT 계정(무료 또는 구독)으로 동작하며,
+      사용량도 내 계정 기준입니다.
     </p>
+
+    <div class="auto-boundary" role="note" aria-label="자동 모드에서 앱과 사용자가 하는 일">
+      <div>
+        <span class="boundary-kicker">사용자가 하는 일</span>
+        <strong>Codex 설치 · ChatGPT 로그인</strong>
+        <p>각자 자기 컴퓨터에서 한 번만 설정합니다. 다른 사람이 앱을 받으면 그 사람 계정으로 다시 해야 합니다.</p>
+      </div>
+      <div>
+        <span class="boundary-kicker">앱이 하는 일</span>
+        <strong>로그인 상태 검출 · 자동 요청</strong>
+        <p>설정이 끝난 PC에서만 자동 모드를 켭니다. 실패하면 복붙 모드로 계속 사용할 수 있습니다.</p>
+      </div>
+      <div>
+        <span class="boundary-kicker">앱이 하지 않는 일</span>
+        <strong>Codex 자동 설치 · 인증파일 생성</strong>
+        <p>비밀번호를 받지 않고, <code>auth.json</code>을 만들거나 배포하지 않습니다.</p>
+      </div>
+    </div>
 
     <ol class="auto-steps" role="list">
       <li class="auto-step">
@@ -156,7 +193,7 @@
           <h4 class="auto-step-title">codex(코덱스) 설치하기</h4>
           <p class="auto-step-body">
             아래 한 줄을 그대로 입력하고 <kbd>Enter</kbd>를 누르면 설치됩니다.
-            (Node.js가 미리 설치돼 있어야 합니다.)
+            이 단계는 앱이 대신 하지 않습니다. (Node.js가 미리 설치돼 있어야 합니다.)
           </p>
           <pre class="auto-cmd"><code>npm i -g &#64;openai/codex</code></pre>
         </div>
@@ -248,6 +285,65 @@
     font-size: 0.8125rem;
     font-weight: 700;
     color: var(--accent-oxblood);
+  }
+
+  .mode-guide {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    margin-top: var(--space-sm);
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-asymmetric);
+    background: var(--surface-sunken);
+  }
+
+  .mode-guide-title {
+    margin: 0;
+    font-family: var(--heading-family);
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .mode-guide-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: var(--space-sm);
+  }
+
+  .mode-guide-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-soft);
+    background: var(--surface-elevated);
+  }
+
+  .mode-guide-card h4,
+  .mode-guide-card p {
+    margin: 0;
+  }
+
+  .mode-guide-card h4 {
+    font-family: var(--heading-family);
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .mode-guide-card strong {
+    font-family: var(--heading-family);
+    font-size: 0.9375rem;
+    color: var(--accent-oxblood);
+  }
+
+  .mode-guide-card p {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
   }
 
   .step-list {
@@ -359,6 +455,20 @@
     opacity: 0.9;
   }
 
+  .branch-checks {
+    margin: var(--space-xs) 0 0 0;
+    padding: var(--space-sm) var(--space-md) var(--space-sm) 1.45rem;
+    border-left: 3px solid var(--border-subtle);
+    background: var(--surface-base);
+    border-radius: var(--radius-tight);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
   /* AC-USAGE-AUTO-SETUP (Slice 9): 고급 자동 모드 설정 섹션. 기본 단계와
      시각적으로 구분되도록 점선 테두리 + 별도 헤더. 토큰만 사용. */
   .auto-setup {
@@ -397,6 +507,42 @@
     font-size: 0.875rem;
     color: var(--text-secondary);
     line-height: 1.65;
+  }
+
+  .auto-boundary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: var(--space-sm);
+  }
+
+  .auto-boundary > div {
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-soft);
+    background: var(--surface-elevated);
+  }
+
+  .boundary-kicker {
+    display: block;
+    margin-bottom: var(--space-xs);
+    font-family: var(--heading-family);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .auto-boundary strong {
+    display: block;
+    font-family: var(--heading-family);
+    font-size: 0.875rem;
+    color: var(--text-primary);
+  }
+
+  .auto-boundary p {
+    margin: var(--space-xs) 0 0 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
   }
 
   .auto-steps {

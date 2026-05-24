@@ -45,6 +45,14 @@ export interface PromptInput {
   schema: string[];
 }
 
+/** Inputs for a whole-source automatic extraction prompt. */
+export interface GlobalPromptInput {
+  /** Source chunks to expose to the LLM. Emitted verbatim, in document order. */
+  chunks: Chunk[];
+  /** User outline node titles and/or free-text topic terms. */
+  schema: string[];
+}
+
 /**
  * Static role-instruction block (Codex-agreed; Slice-9 강화).
  *
@@ -67,10 +75,27 @@ const ROLE_BLOCK = [
   '하는 일은 두 가지다. (1) 원문에서 "다시 읽지 않아도 재사용 가능한 지식 단위"를 후보로 뽑는다(전체 요약이 아니라 재사용 단위 우선). (2) 각 후보를 사용자의 목차에 분류한다.',
   '후보 유형(아래 중 가장 맞는 하나를 골라 reason에 명시): 개념(concept) · 주장(argument) · 방법(method) · 학자/인물(scholar) · 종교 텍스트(religious_text) · 반론(objection) · 인용(quotation) · 기타(other).',
   '분류: 각 후보의 schema_field 에는 [SCHEMA]의 목차 항목 중 가장 잘 맞는 항목을 그대로 적는다. 맞는 항목이 없으면 후보 자체의 주제로 schema_field 를 제안한다(없는 목차 항목을 지어내지 마라).',
+  '목차/장·절 제목/표제, 단독 저자명·편집자명, 참고문헌·각주·색인·판권 조각은 후보로 출력하지 마라. 그런 정보는 구조 파악과 분류에만 사용한다.',
   '추측하지 말고, 반드시 chunk_id를 근거로 표시하라. 각 후보는 evidence 에 최소 1개의 chunk_id 근거를 포함해야 한다.',
   '근거로 제시하는 chunk_id는 아래 [CANDIDATE_CHUNKS]에 실제로 있는 id여야 한다(없는 id를 지어내지 마라). 지어낸 chunk_id는 거부되어 위키에 들어가지 못한다.',
   'quote 에는 해당 chunk_id 청크의 원문을 그대로(축자) 인용하라(요약·바꿔쓰기 금지). 원문 텍스트는 절대 변경하지 마라.',
   '재사용성 판정: "이 후보를 원문을 다시 읽지 않고도 나중에 재사용할 수 있는가?" — 아니면 그 후보는 빼라.',
+  '이번 응답에서는 중요한 후보 최대 8개만 출력하라. 각 후보의 evidence는 가장 강한 chunk_id 1개만 넣고, quote는 해당 청크 안의 축자 인용 600자 이하로 제한하라. evidence에는 quote에 대응하는 가톨릭 한국어 번역 translation_ko를 함께 넣어라. 많은 후보보다 완성된 JSON을 우선하라.',
+  '한글 번역·요약은 가톨릭 용어 우선(개신교 번역 금지). 원어(히브리어/그리스어/라틴어) 용어와 원문 제목은 그대로 보존하라.',
+  '출력은 아래 [OUTPUT_FORMAT] JSON 형식만 사용하라(코드펜스 ```json 으로 감싸도 된다). 형식 외 다른 텍스트는 출력하지 마라.',
+].join('\n');
+
+const GLOBAL_ROLE_BLOCK = [
+  '너는 개인 학술 위키의 "원문 추출·분류 도우미"다. 아래 [SCHEMA](목차)와 [CANDIDATE_CHUNKS](원문 청크)만 사용한다.',
+  '원문 전체를 한 문서로 요약하지 말고, 나중에 논문/위키에서 재사용 가능한 지식 단위를 여러 후보로 뽑아라.',
+  '후보 유형(아래 중 가장 맞는 하나를 골라 reason에 명시): 개념(concept) · 주장(argument) · 방법(method) · 학자/인물(scholar) · 종교 텍스트(religious_text) · 반론(objection) · 인용(quotation) · 기타(other).',
+  '각 후보의 schema_field 에는 [SCHEMA]의 목차 항목 중 가장 잘 맞는 항목을 그대로 적는다. 맞는 항목이 없으면 후보 자체의 주제로 schema_field 를 제안한다(없는 목차 항목을 지어내지 마라).',
+  '목차/장·절 제목/표제, 단독 저자명·편집자명, 참고문헌·각주·색인·판권 조각은 후보로 출력하지 마라. 그런 정보는 구조 파악과 분류에만 사용한다.',
+  '추측하지 말고, 반드시 chunk_id를 근거로 표시하라. 각 후보는 evidence 에 최소 1개의 chunk_id 근거를 포함해야 한다.',
+  '근거로 제시하는 chunk_id는 아래 [CANDIDATE_CHUNKS]에 실제로 있는 id여야 한다(없는 id를 지어내지 마라). 지어낸 chunk_id는 거부되어 위키에 들어가지 못한다.',
+  'quote 에는 해당 chunk_id 청크의 원문을 그대로(축자) 인용하라(요약·바꿔쓰기 금지). 원문 텍스트는 절대 변경하지 마라.',
+  '재사용성 판정: "이 후보를 원문을 다시 읽지 않고도 나중에 재사용할 수 있는가?" — 아니면 그 후보는 빼라.',
+  '이번 응답에서는 중요한 후보 최대 8개만 출력하라. 각 후보의 evidence는 가장 강한 chunk_id 1개만 넣고, quote는 해당 청크 안의 축자 인용 600자 이하로 제한하라. evidence에는 quote에 대응하는 가톨릭 한국어 번역 translation_ko를 함께 넣어라. 많은 후보보다 완성된 JSON을 우선하라.',
   '한글 번역·요약은 가톨릭 용어 우선(개신교 번역 금지). 원어(히브리어/그리스어/라틴어) 용어와 원문 제목은 그대로 보존하라.',
   '출력은 아래 [OUTPUT_FORMAT] JSON 형식만 사용하라(코드펜스 ```json 으로 감싸도 된다). 형식 외 다른 텍스트는 출력하지 마라.',
 ].join('\n');
@@ -83,7 +108,7 @@ const OUTPUT_FORMAT = [
   '      "title": "...",',
   '      "schema_field": "...",',
   '      "summary_ko": "...",',
-  '      "evidence": [{ "chunk_id": "...", "quote": "..." }],',
+  '      "evidence": [{ "chunk_id": "...", "quote": "...", "translation_ko": "..." }],',
   '      "confidence": "high|medium|low",',
   '      "reason": "..."',
   '    }',
@@ -130,6 +155,25 @@ export function buildPrompt(input: PromptInput): string {
   if (input.candidate.target_entry_title) {
     sections.push(`- 관련 기존 항목: ${input.candidate.target_entry_title}`);
   }
+  sections.push('');
+  sections.push('[SCHEMA]');
+  sections.push(schemaBlock(input.schema));
+  sections.push('');
+  sections.push('[CANDIDATE_CHUNKS]');
+  sections.push(chunkBlock(input.chunks));
+  sections.push('');
+  sections.push('[OUTPUT_FORMAT]');
+  sections.push(OUTPUT_FORMAT);
+  return sections.join('\n');
+}
+
+/**
+ * Build the deterministic whole-source prompt used by the advanced automatic
+ * LLM path. The response is still validated by responseValidator before import.
+ */
+export function buildGlobalPrompt(input: GlobalPromptInput): string {
+  const sections: string[] = [];
+  sections.push(GLOBAL_ROLE_BLOCK);
   sections.push('');
   sections.push('[SCHEMA]');
   sections.push(schemaBlock(input.schema));

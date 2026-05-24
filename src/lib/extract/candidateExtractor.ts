@@ -34,6 +34,7 @@
 import { extractMarkdown, type MarkdownBlock } from './markdownExtractor';
 import { extractPlainText } from './plainTextExtractor';
 import { extractPdfText } from './pdfExtractor';
+import { analyzePdfTextQuality, type TextQualityReport } from './textQuality';
 
 export type CandidateType =
   | 'concept'
@@ -81,6 +82,8 @@ export interface CandidateBundle {
   candidate_items: CandidateItem[];
   /** The normalized full-document text (after extractor reduction). */
   normalized_text: string;
+  /** Optional extraction-quality report. Present for PDFs. */
+  text_quality?: TextQualityReport;
 }
 
 export interface ExtractInput {
@@ -387,6 +390,7 @@ export async function extractCandidates(input: ExtractInput): Promise<CandidateB
       source_kind: 'pdf',
       candidate_items: items,
       normalized_text: pdf.text,
+      text_quality: analyzePdfTextQuality(pdf.pages),
     };
   }
   // plaintext fallback

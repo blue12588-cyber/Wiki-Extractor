@@ -73,6 +73,16 @@
     }
     return order.map((t) => ({ type: t, count: counts.get(t) ?? 0 }));
   });
+
+  function formatEvidenceRef(ref: string): string {
+    const pageLine = ref.match(/#page-(\d+)-line-(\d+)/);
+    if (pageLine) return `페이지 ${pageLine[1]} · 줄 ${pageLine[2]}`;
+    const line = ref.match(/#line-(\d+)/);
+    if (line) return `줄 ${line[1]}`;
+    const md = ref.match(/#md-block-(\d+)/);
+    if (md) return `Markdown 블록 ${Number(md[1]) + 1}`;
+    return ref;
+  }
 </script>
 
 <section class="wiki-view" aria-label="Extracted candidate items" aria-busy={busy}>
@@ -132,10 +142,10 @@
 
           <p class="card-locator">
             {#if item.page !== undefined}
-              <span class="loc">page {item.page}</span>
+              <span class="loc page">페이지 {item.page}</span>
             {/if}
             {#each item.evidence_refs as ref (ref)}
-              <span class="loc ref">{ref}</span>
+              <span class="loc ref" title={ref}>{formatEvidenceRef(ref)}</span>
             {/each}
             <span class="loc id" title="local candidate id">#{item.local_candidate_id}</span>
           </p>
@@ -339,6 +349,14 @@
     padding: 0 var(--space-xs);
     border-radius: var(--radius-tight);
     background: var(--surface-sunken);
+  }
+
+  .loc.page {
+    font-family: var(--heading-family);
+    font-weight: 600;
+    color: var(--accent-oxblood);
+    background: var(--surface-elevated);
+    border: 1px solid var(--border-subtle);
   }
 
   .loc.id { color: var(--text-secondary); opacity: 0.85; }

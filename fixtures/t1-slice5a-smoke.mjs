@@ -9,6 +9,8 @@
  *   rule-determinism     same bundle+chunks → byte-identical scored candidates
  *   claim-verbs          EN + KO assertion verbs detected; non-verbs ignored
  *   demote-patterns      footnote/biblio/toc/index/copyright → demoted+ignore
+ *   structural-filter    TOC headings / standalone names are structure-only,
+ *                       but scholar claims with assertion verbs survive.
  *   classify-novelty     no existing wiki → create_new
  *   dedup-update-link    duplicate → update_existing; related → link_only
  *   schema-input         outline keyword raises schema-fit + appears in rationale
@@ -136,6 +138,7 @@ async function demotePatterns() {
   const samples = {
     footnote: '12. Smith, Title, p. 45, cf. ibid.',
     bibliography: '참고문헌\nSmith, J. (1999). A Book Title.',
+    citation_fragment: 'Greenfield, “Hebrew Bible and Canaanite Literature,” 545-60; Hallo,',
     toc: '서론 ............ 12',
     index: 'grace, 12, 45, 78, 90',
     copyright: 'Copyright © 2020. All rights reserved. ISBN 978-0-13-468599-1',
@@ -165,6 +168,44 @@ async function demotePatterns() {
   }
   if (scored.recommended_action !== 'ignore') return fail(report, 'demoted candidate not classified ignore');
   if (scored.sub.demotion_penalty >= 0) return fail(report, 'no demotion penalty applied');
+  pass(report);
+}
+
+async function structuralFilter() {
+  const { structuralReasonForCandidate } = await import('../src/lib/candidate/structuralFilter.ts');
+  const chapter = structuralReasonForCandidate({
+    title: 'CHAPTER 7 - Postscript: Portraits of Yahweh',
+    summary: '제7장 - 후기: Yahweh의 초상들',
+    evidence_text: 'CHAPTER 7 - Postscript: Portraits of Yahweh',
+  });
+  const author = structuralReasonForCandidate({
+    title: 'David Noel Freedman',
+    summary: 'DAVID NOEL FREEDMAN',
+    evidence_text: 'ASTRID B. BECK\nDAVID NOEL FREEDMAN',
+  });
+  const citation = structuralReasonForCandidate({
+    title: 'Hebrew Bible and Canaanite Literature,',
+    summary: 'Greenfield, “Hebrew Bible and Canaanite Literature,” 545-60; Hallo,',
+    evidence_text: 'Greenfield, “Hebrew Bible and Canaanite Literature,” 545-60; Hallo,',
+  });
+  const scholarClaim = structuralReasonForCandidate({
+    title: 'David Noel Freedman',
+    summary: 'Freedman argues that Israelite religion must be read against its ancient Near Eastern context.',
+    evidence_text: 'Freedman argues that Israelite religion must be read against its ancient Near Eastern context.',
+  });
+  const report = {
+    scenario: 'structural-filter',
+    chapter_rejected: !!chapter,
+    author_rejected: !!author,
+    citation_rejected: !!citation,
+    scholar_claim_kept: scholarClaim === null,
+    reasons_korean: [chapter, author, citation].every((r) => typeof r === 'string' && /[가-힣]/.test(r)),
+  };
+  if (!report.chapter_rejected) return fail(report, 'chapter heading was not rejected as structure-only');
+  if (!report.author_rejected) return fail(report, 'standalone author name was not rejected as structure-only');
+  if (!report.citation_rejected) return fail(report, 'bibliographic citation fragment was not rejected as structure-only');
+  if (!report.scholar_claim_kept) return fail(report, 'scholar claim with assertion verb was wrongly rejected');
+  if (!report.reasons_korean) return fail(report, 'structural rejection reasons are not Korean');
   pass(report);
 }
 
@@ -268,6 +309,7 @@ async function offlineNoNetwork() {
     'src/lib/candidate/candidateEngine.ts',
     'src/lib/candidate/claimVerbs.ts',
     'src/lib/candidate/demotePatterns.ts',
+    'src/lib/candidate/structuralFilter.ts',
     'src/lib/candidate/keywordMatch.ts',
   ];
   const forbidden = ['fetch(', 'XMLHttpRequest', 'llmClient', 'llm_cmd', 'WebSocket', 'http://', 'https://', 'invoke('];
@@ -288,6 +330,7 @@ const table = {
   'rule-determinism': ruleDeterminism,
   'claim-verbs': claimVerbs,
   'demote-patterns': demotePatterns,
+  'structural-filter': structuralFilter,
   'classify-novelty': classifyNovelty,
   'dedup-update-link': dedupUpdateLink,
   'schema-input': schemaInput,

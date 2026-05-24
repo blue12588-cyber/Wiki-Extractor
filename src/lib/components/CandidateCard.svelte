@@ -54,9 +54,20 @@
   // Evidence locator string: chunk/page refs (verbatim from the candidate).
   let locator = $derived.by(() => {
     const refs = [...cand.evidence_refs];
-    if (typeof cand.page === 'number') refs.unshift(`p.${cand.page}`);
+    if (typeof cand.page === 'number') refs.unshift(`페이지 ${cand.page}`);
     return refs;
   });
+
+  function formatLocator(ref: string): string {
+    if (/^페이지 \d+$/.test(ref)) return ref;
+    const pageLine = ref.match(/#page-(\d+)-line-(\d+)/);
+    if (pageLine) return `페이지 ${pageLine[1]} · 줄 ${pageLine[2]}`;
+    const line = ref.match(/#line-(\d+)/);
+    if (line) return `줄 ${line[1]}`;
+    const chunkPage = ref.match(/#p(\d+)$/);
+    if (chunkPage) return `페이지 ${chunkPage[1]}`;
+    return ref;
+  }
 
   function set(next: CandidateDecision) {
     ondecision?.(next);
@@ -98,7 +109,7 @@
     <span class="row-key">근거</span>
     <p class="locators">
       {#each locator as ref (ref)}
-        <span class="loc">{ref}</span>
+        <span class="loc" class:page={ref.startsWith('페이지 ')} title={ref}>{formatLocator(ref)}</span>
       {/each}
       {#if locator.length === 0}
         <span class="loc muted">근거 위치 없음</span>
@@ -266,6 +277,13 @@
     border-radius: var(--radius-tight);
     background: var(--surface-sunken);
     color: var(--text-secondary);
+  }
+  .loc.page {
+    font-family: var(--heading-family);
+    font-weight: 600;
+    color: var(--accent-oxblood);
+    background: var(--surface-elevated);
+    border: 1px solid var(--border-subtle);
   }
   .loc.muted { opacity: 0.7; }
 

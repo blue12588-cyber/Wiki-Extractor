@@ -13,22 +13,40 @@
   import { parseOutline, type ParsedOutline } from '$lib/outline/outlineParser';
 
   type Props = {
+    value?: string;
+    parsed?: ParsedOutline | null;
+    onrawchange?: (raw: string) => void;
     onparsed?: (outline: ParsedOutline) => void;
   };
-  let { onparsed }: Props = $props();
+  let { value = '', parsed = null, onrawchange, onparsed }: Props = $props();
 
   let raw = $state('');
   let outline = $state<ParsedOutline | null>(null);
 
+  $effect(() => {
+    raw = value;
+  });
+
+  $effect(() => {
+    outline = parsed;
+  });
+
+  function handle_input(e: Event) {
+    raw = (e.currentTarget as HTMLTextAreaElement).value;
+    onrawchange?.(raw);
+  }
+
   function handle_parse() {
     const parsed = parseOutline(raw);
     outline = parsed;
+    onrawchange?.(raw);
     onparsed?.(parsed);
   }
 
   function clear() {
     raw = '';
     outline = null;
+    onrawchange?.('');
     onparsed?.({ nodes: [], roots: [] });
   }
 
@@ -44,7 +62,8 @@
   <textarea
     id="outline-text"
     class="paste"
-    bind:value={raw}
+    value={raw}
+    oninput={handle_input}
     rows="8"
     placeholder={'예)\n1. 서론\n  1.1 연구 배경\n  1.2 연구 목적\n2. 본론\n  2.1 시편의 탄식\n3. 결론'}
   ></textarea>

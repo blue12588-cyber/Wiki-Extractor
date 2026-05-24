@@ -11,6 +11,7 @@
  *   node --import tsx fixtures/t1-extract-and-validate.mjs determinism
  *   node --import tsx fixtures/t1-extract-and-validate.mjs fixture-extraction
  *   node --import tsx fixtures/t1-extract-and-validate.mjs schema-validate
+ *   node --import tsx fixtures/t1-extract-and-validate.mjs pdf-text-quality
  *
  * Exit codes:
  *   0 = scenario passed
@@ -269,14 +270,59 @@ async function runWikiDisplayShape() {
   console.log('[ok] every candidate item carries the fields the wiki view binds to');
 }
 
+async function runPdfTextQuality() {
+  const { analyzePdfTextQuality } = await import('../src/lib/extract/textQuality.ts');
+  const scanned = analyzePdfTextQuality(['', '   ', '']);
+  const weak = analyzePdfTextQuality([
+    'Title page',
+    'Short',
+    'This page has a little bit of text but not enough for reliable extraction.',
+  ]);
+  const good = analyzePdfTextQuality([
+    'This page argues that textual evidence can support a reusable academic claim. '.repeat(8),
+    'The author defines a method and demonstrates its limits with enough surrounding context. '.repeat(8),
+  ]);
+  const report = {
+    scenario: 'pdf-text-quality',
+    scanned_level: scanned.level,
+    scanned_has_ocr_hint: scanned.suggestion_ko.includes('OCR'),
+    weak_level: weak.level,
+    good_level: good.level,
+    good_page_counts: good.page_char_counts.length,
+  };
+  console.log(JSON.stringify(report, null, 2));
+  if (scanned.level !== 'bad') {
+    console.error(`[fail] scanned-like PDF should be bad, got ${scanned.level}`);
+    process.exit(1);
+  }
+  if (!report.scanned_has_ocr_hint) {
+    console.error('[fail] scanned-like PDF warning should mention OCR');
+    process.exit(1);
+  }
+  if (weak.level === 'ok') {
+    console.error('[fail] weak text extraction should warn or fail');
+    process.exit(1);
+  }
+  if (good.level !== 'ok') {
+    console.error(`[fail] good text extraction should be ok, got ${good.level}`);
+    process.exit(1);
+  }
+  if (good.page_char_counts.length !== 2) {
+    console.error('[fail] page_char_counts should preserve page count');
+    process.exit(1);
+  }
+  console.log('[ok] PDF text-quality warnings classify scanned/weak/good pages');
+}
+
 const scenario = process.argv[2];
 if (scenario === 'determinism') await runDeterminism();
 else if (scenario === 'fixture-extraction') await runFixtureExtraction();
 else if (scenario === 'schema-validate') await runSchemaValidate();
 else if (scenario === 'upload-magic-bytes') await runUploadMagicBytes();
 else if (scenario === 'wiki-display-shape') await runWikiDisplayShape();
+else if (scenario === 'pdf-text-quality') await runPdfTextQuality();
 else {
   console.error(`[fail] unknown scenario "${scenario}"`);
-  console.error('usage: node --import tsx fixtures/t1-extract-and-validate.mjs <determinism|fixture-extraction|schema-validate|upload-magic-bytes|wiki-display-shape>');
+  console.error('usage: node --import tsx fixtures/t1-extract-and-validate.mjs <determinism|fixture-extraction|schema-validate|upload-magic-bytes|wiki-display-shape|pdf-text-quality>');
   process.exit(1);
 }

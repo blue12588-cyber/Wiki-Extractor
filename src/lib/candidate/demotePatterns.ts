@@ -42,6 +42,8 @@ const BIBLIO_HEADING_RE =
   /(참고\s*문헌|인용\s*문헌|references|bibliography|works\s+cited)/i;
 const BIBLIO_ENTRY_RE =
   /[A-Z][a-z]+,\s+[A-Z]\.?(?:\s*[A-Z]\.?)*\s*\(\d{4}\)/; // "Smith, J. (1999)"
+const BIBLIO_CITATION_FRAGMENT_RE =
+  /(?:see|cf\.|참조)\s+[A-Z][A-Za-z.'-]+|[A-Z][A-Za-z.'-]+,\s+[“"][^”"]{4,}[”"],?\s*\d{1,4}|[“"][^”"]{4,}[”"],?\s*\d{1,4}\s*[-–]\s*\d{1,4}/u;
 
 // --- Table of contents / 목차 heading, or a dotted-leader + page-number line.
 const TOC_HEADING_RE = /(목\s*차|table\s+of\s+contents|차\s*례)/i;
@@ -69,7 +71,7 @@ const RULES: Rule[] = [
   },
   {
     kind: 'bibliography',
-    test: (t) => BIBLIO_HEADING_RE.test(t) || BIBLIO_ENTRY_RE.test(t),
+    test: (t) => BIBLIO_HEADING_RE.test(t) || BIBLIO_ENTRY_RE.test(t) || BIBLIO_CITATION_FRAGMENT_RE.test(t),
     reason: '참고문헌/인용문헌 패턴으로 위키 후보가 아닙니다',
   },
   {

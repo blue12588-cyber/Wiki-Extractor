@@ -41,6 +41,7 @@
   import { pipeline } from '$lib/pipeline/store.svelte';
   import { llmConfig } from '$lib/llm/llmClient';
   import { loadAllEntries } from '$lib/wiki/wikiStore';
+  import { loadPersistedOutline } from '$lib/pipeline/actions';
 
   let { children } = $props();
 
@@ -57,6 +58,7 @@
 
   onMount(async () => {
     if (pipeline.bootstrapped) return;
+    loadPersistedOutline();
     pipeline.llmCfg = await llmConfig();
     try {
       pipeline.entries = await loadAllEntries();
@@ -111,7 +113,7 @@
   </nav>
 
   <main class="content">
-    <div class="content-inner">
+    <div class="content-inner" class:wiki-wide={current === 'wiki'}>
       {@render children()}
     </div>
   </main>
@@ -286,5 +288,9 @@
   .content-inner {
     max-width: 860px;
     margin-inline: auto;
+  }
+
+  .content-inner.wiki-wide {
+    max-width: 1480px;
   }
 </style>

@@ -20,9 +20,13 @@
  *                        QUARANTINED into `rejectedEvidence`; only refs that bind
  *                        to a real chunk are kept on the consumable `evidence`.
  *   4. confidence enum — `confidence` ∈ {high, medium, low} when present.
+ *   5. structure-only filter — TOC/section headings, standalone names, and
+ *                        bibliography fragments are kept as source structure,
+ *                        not importable wiki knowledge cards.
  *
  * Pure: no I/O, no network, no LLM. Same (parsed, knownChunkIds) → same result.
  */
+import { structuralReasonForCandidate } from '../candidate/structuralFilter';
 
 export type Confidence = 'high' | 'medium' | 'low';
 const CONFIDENCE_VALUES: Confidence[] = ['high', 'medium', 'low'];
@@ -31,6 +35,8 @@ const CONFIDENCE_VALUES: Confidence[] = ['high', 'medium', 'low'];
 export interface ValidatedEvidence {
   chunk_id: string;
   quote: string;
+  /** Catholic Korean translation of the cited quote/passage when the LLM supplies it. */
+  translation_ko: string;
 }
 
 /**
@@ -154,6 +160,7 @@ export function validateResponse(
       const ev = rawEvidence[ei];
       const chunk_id = isObject(ev) ? asString(ev.chunk_id).trim() : '';
       const quote = isObject(ev) ? asString(ev.quote) : '';
+      const translation_ko = isObject(ev) ? asString(ev.translation_ko).trim() : '';
       if (chunk_id.length === 0) {
         const reason = `근거 #${ei + 1}: chunk_id가 비어 있습니다.`;
         violations.push(reason);
@@ -170,7 +177,7 @@ export function validateResponse(
         continue;
       }
       // Real, bound chunk_id: safe to keep as consumable evidence.
-      evidence.push({ chunk_id, quote });
+      evidence.push({ chunk_id, quote, translation_ko });
     }
 
     // 4. confidence enum (optional, but if present must be valid).
@@ -185,6 +192,15 @@ export function validateResponse(
         );
       }
     }
+
+    const structuralReason = structuralReasonForCandidate({
+      title,
+      schema_field,
+      summary_ko,
+      reason,
+      evidence,
+    });
+    if (structuralReason) violations.push(structuralReason);
 
     return {
       index,

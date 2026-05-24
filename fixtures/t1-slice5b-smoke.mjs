@@ -21,6 +21,8 @@
  *   import-build        validated → WikiEntry: original_text = VERBATIM chunk
  *                       text (preserved), translated_text = summary_ko
  *                       (Catholic), evidence bound to real chunk_id, LLM tag.
+ *   structural-reject   TOC/section headings and standalone author names are
+ *                       rejected even with real chunk_id evidence.
  *   offline-no-network  bridge modules import zero net/LLM symbols (static).
  *
  *   --- slice5b-repair (defense-in-depth hardening) ---
@@ -166,6 +168,31 @@ async function pasteParse() {
   pass(report);
 }
 
+async function partialJsonRecovery() {
+  const { parseResponse } = await import('../src/lib/bridge/responseParser.ts');
+  const raw = [
+    '{ "wiki_candidates": [',
+    '{"title":"완성 후보 1","schema_field":"시편","summary_ko":"요약","evidence":[{"chunk_id":"chunk-real-0","quote":"q"}],"confidence":"high"},',
+    '{"title":"완성 후보 2","schema_field":"시편","summary_ko":"요약","evidence":[{"chunk_id":"chunk-real-1","quote":"q"}],"confidence":"medium"},',
+    '{"title":"잘린 후보","schema_field":"시편","summary_ko":"요',
+  ].join('');
+  const res = parseResponse(raw);
+  const report = {
+    scenario: 'partial-json-recovery',
+    ok: res.ok,
+    marked_recovered: res.ok && res.recovered === true,
+    recovered_count: res.ok ? res.recoveredCount : 0,
+    candidates_count: res.ok && Array.isArray(res.value.wiki_candidates) ? res.value.wiki_candidates.length : 0,
+    first_title: res.ok ? res.value.wiki_candidates?.[0]?.title : null,
+  };
+  if (!report.ok) return fail(report, 'truncated wiki_candidates reply was not recovered');
+  if (!report.marked_recovered) return fail(report, 'recovered reply not marked as recovered');
+  if (report.recovered_count !== 2) return fail(report, `expected 2 recovered candidates, got ${report.recovered_count}`);
+  if (report.candidates_count !== 2) return fail(report, `expected 2 candidates, got ${report.candidates_count}`);
+  if (report.first_title !== '완성 후보 1') return fail(report, 'first recovered candidate title mismatch');
+  pass(report);
+}
+
 async function validateShape() {
   const { validateResponse } = await import('../src/lib/bridge/responseValidator.ts');
   const known = ['chunk-real-0'];
@@ -298,6 +325,107 @@ async function importBuild() {
   pass(report);
 }
 
+async function importEvidenceTranslation() {
+  const { validateResponse } = await import('../src/lib/bridge/responseValidator.ts');
+  const { buildEntryFromValidated } = await import('../src/lib/bridge/wikiImport.ts');
+  const quote = '탄식 시편이 하느님께 대한 신뢰의 표현이라고 주장한다';
+  const chunk = mkChunk({
+    text: `저자는 ${quote}. 이 문장은 더 긴 청크 안에 있다.`,
+  });
+  const res = validateResponse(
+    {
+      wiki_candidates: [
+        {
+          title: '탄식 시편의 신학',
+          schema_field: '시편 신학',
+          summary_ko: '짧은 요약',
+          evidence: [
+            {
+              chunk_id: 'chunk-real-0',
+              quote,
+              translation_ko: '탄식 시편은 하느님께 대한 신뢰의 표현이라는 뜻이다.',
+            },
+          ],
+          confidence: 'high',
+        },
+      ],
+    },
+    ['chunk-real-0'],
+  );
+  const entry = buildEntryFromValidated(res.importable[0], {
+    source_id: 'src',
+    chunks: [chunk],
+    now: '2026-05-23T00:00:00Z',
+  });
+  const claim = entry.claims[0];
+  const report = {
+    scenario: 'import-evidence-translation',
+    original_is_exact_source_quote: claim.original_text === quote,
+    original_not_whole_chunk_when_quote_binds: claim.original_text !== chunk.text,
+    translated_is_evidence_translation: claim.translated_text === '탄식 시편은 하느님께 대한 신뢰의 표현이라는 뜻이다.',
+    translated_not_summary_fallback: claim.translated_text !== '짧은 요약',
+  };
+  if (!report.original_is_exact_source_quote) return fail(report, 'original_text did not use exact source quote');
+  if (!report.original_not_whole_chunk_when_quote_binds) return fail(report, 'original_text stayed whole chunk despite exact quote');
+  if (!report.translated_is_evidence_translation) return fail(report, 'translation_ko did not populate translated_text');
+  if (!report.translated_not_summary_fallback) return fail(report, 'summary fallback used despite evidence translation');
+  pass(report);
+}
+
+async function structuralReject() {
+  const { validateResponse } = await import('../src/lib/bridge/responseValidator.ts');
+  const res = validateResponse(
+    {
+      wiki_candidates: [
+        {
+          title: 'CHAPTER 7 - Postscript: Portraits of Yahweh',
+          schema_field: '1.2 선행 연구 검토',
+          summary_ko: '제7장 - 후기: Yahweh의 초상들',
+          evidence: [{ chunk_id: 'chunk-real-0', quote: 'CHAPTER 7 - Postscript: Portraits of Yahweh' }],
+          confidence: 'medium',
+        },
+        {
+          title: 'David Noel Freedman',
+          schema_field: '1.2 선행 연구 검토',
+          summary_ko: 'DAVID NOEL FREEDMAN',
+          evidence: [{ chunk_id: 'chunk-real-0', quote: 'DAVID NOEL FREEDMAN' }],
+          confidence: 'low',
+        },
+        {
+          title: '이스라엘 문화의 가나안적 연속성',
+          schema_field: '1.2 선행 연구 검토',
+          summary_ko: '저자는 이스라엘 문화가 가나안 문화와 연속성을 보인다고 주장한다.',
+          evidence: [
+            {
+              chunk_id: 'chunk-real-0',
+              quote: '저자는 탄식 시편이 하느님께 대한 신뢰의 표현이라고 주장한다.',
+            },
+          ],
+          confidence: 'high',
+        },
+      ],
+    },
+    ['chunk-real-0'],
+  );
+  const chapter = res.candidates[0];
+  const author = res.candidates[1];
+  const real = res.candidates[2];
+  const report = {
+    scenario: 'structural-reject',
+    chapter_rejected: !chapter.importable,
+    chapter_structural_reason: chapter.violations.some((v) => v.includes('구조 정보 후보 제외')),
+    author_rejected: !author.importable,
+    author_structural_reason: author.violations.some((v) => v.includes('구조 정보 후보 제외')),
+    knowledge_importable: real.importable,
+    importable_count: res.importable.length,
+  };
+  if (!report.chapter_rejected || !report.chapter_structural_reason) return fail(report, 'chapter/TOC label was not structurally rejected');
+  if (!report.author_rejected || !report.author_structural_reason) return fail(report, 'standalone author name was not structurally rejected');
+  if (!report.knowledge_importable) return fail(report, 'real knowledge candidate was wrongly rejected');
+  if (report.importable_count !== 1) return fail(report, `expected exactly 1 importable, got ${report.importable_count}`);
+  pass(report);
+}
+
 async function offlineNoNetwork() {
   // Static guard: the bridge modules must not import network/LLM symbols. The
   // app NEVER calls ChatGPT in 5b (copy-paste only). 'ChatGPT 열기' is
@@ -308,6 +436,7 @@ async function offlineNoNetwork() {
     'src/lib/bridge/responseParser.ts',
     'src/lib/bridge/responseValidator.ts',
     'src/lib/bridge/wikiImport.ts',
+    'src/lib/candidate/structuralFilter.ts',
   ];
   const forbidden = ['fetch(', 'XMLHttpRequest', 'llmClient', 'llm_cmd', 'llm_extract', 'WebSocket', 'http://', 'https://', 'invoke(', 'openai', 'api.'];
   const violations = [];
@@ -458,10 +587,13 @@ const scenario = process.argv[2];
 const table = {
   'prompt-build': promptBuild,
   'paste-parse': pasteParse,
+  'partial-json-recovery': partialJsonRecovery,
   'validate-shape': validateShape,
   'evidence-bind': evidenceBind,
   'confidence-enum': confidenceEnum,
   'import-build': importBuild,
+  'import-evidence-translation': importEvidenceTranslation,
+  'structural-reject': structuralReject,
   'offline-no-network': offlineNoNetwork,
   'source-scope': sourceScope,
   'rejected-evidence': rejectedEvidence,

@@ -95,7 +95,7 @@
         <textarea
           id={`stmt-${claim.claim_id}`}
           class="inp stmt"
-          rows="2"
+          rows="3"
           bind:value={claim.statement}
           oninput={mark_dirty}
         ></textarea>
@@ -105,7 +105,7 @@
           <textarea
             id={`tr-${claim.claim_id}`}
             class="inp tr"
-            rows="2"
+            rows="6"
             bind:value={claim.translated_text}
             oninput={mark_dirty}
             placeholder="LLM 번역 또는 직접 입력. 원문은 변경되지 않습니다."
@@ -213,6 +213,14 @@
   textarea.inp {
     resize: vertical;
     line-height: 1.5;
+  }
+
+  textarea.stmt {
+    min-height: 5.25rem;
+  }
+
+  textarea.tr {
+    min-height: 9rem;
   }
 
   .claims {

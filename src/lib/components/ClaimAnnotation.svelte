@@ -35,6 +35,18 @@
       toggle_pin();
     }
   }
+
+  function formatRef(ref: string): string {
+    const pageLine = ref.match(/#page-(\d+)-line-(\d+)/);
+    if (pageLine) return `페이지 ${pageLine[1]} · 줄 ${pageLine[2]}`;
+    const chunkPage = ref.match(/#p(\d+)$/);
+    if (chunkPage) return `페이지 ${chunkPage[1]}`;
+    const line = ref.match(/#line-(\d+)/);
+    if (line) return `줄 ${line[1]}`;
+    const md = ref.match(/#md-block-(\d+)/);
+    if (md) return `Markdown 블록 ${Number(md[1]) + 1}`;
+    return ref;
+  }
 </script>
 
 <div class="claim">
@@ -74,7 +86,7 @@
         <p class="ann-refs">
           <span class="refs-label">근거 위치</span>
           {#each evidence_refs as ref (ref)}
-            <span class="ref">{ref}</span>
+            <span class="ref" title={ref}>{formatRef(ref)}</span>
           {/each}
         </p>
       {/if}

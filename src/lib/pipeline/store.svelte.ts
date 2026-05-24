@@ -14,6 +14,7 @@
  */
 
 import type { CandidateBundle } from '$lib/extract/candidateExtractor';
+import type { TextQualityReport } from '$lib/extract/textQuality';
 import type { Chunk } from '$lib/chunk/chunker';
 import type { ParsedOutline } from '$lib/outline/outlineParser';
 import type { WikiEntry } from '$lib/wiki/wikiTypes';
@@ -21,6 +22,15 @@ import type { LlmConfigSnapshot } from '$lib/llm/llmClient';
 import type { CandidateCardModel } from '$lib/candidate/candidateEngine';
 
 export type TabId = 'main' | 'wiki' | 'login' | 'feedback';
+
+export interface AutoWikiProgress {
+  source_id: string;
+  nextBatch: number;
+  totalBatches: number;
+  imported: number;
+  mapped: number;
+  updated_at: string;
+}
 
 /**
  * One reactive object exported as a singleton. Components read/write fields on
@@ -30,9 +40,11 @@ function createPipeline() {
   let bundle = $state<CandidateBundle | null>(null);
   let chunks = $state<Chunk[]>([]);
   let chunkStatus = $state<string | null>(null);
+  let textQuality = $state<TextQualityReport | null>(null);
   let extracting = $state(false);
 
   let outline = $state<ParsedOutline | null>(null);
+  let outlineRaw = $state('');
   let entries = $state<WikiEntry[]>([]);
   /** Slice 5a — rule-engine candidate cards (score hidden in UI). */
   let candidateCards = $state<CandidateCardModel[]>([]);
@@ -53,6 +65,7 @@ function createPipeline() {
    * LLM; this only tracks which candidate's prompt is shown for copy-paste.
    */
   let bridgeCandidateId = $state<string | null>(null);
+  let autoWikiProgress = $state<AutoWikiProgress | null>(null);
 
   return {
     get bundle() { return bundle; },
@@ -61,10 +74,14 @@ function createPipeline() {
     set chunks(v) { chunks = v; },
     get chunkStatus() { return chunkStatus; },
     set chunkStatus(v) { chunkStatus = v; },
+    get textQuality() { return textQuality; },
+    set textQuality(v) { textQuality = v; },
     get extracting() { return extracting; },
     set extracting(v) { extracting = v; },
     get outline() { return outline; },
     set outline(v) { outline = v; },
+    get outlineRaw() { return outlineRaw; },
+    set outlineRaw(v) { outlineRaw = v; },
     get entries() { return entries; },
     set entries(v) { entries = v; },
     get candidateCards() { return candidateCards; },
@@ -81,6 +98,8 @@ function createPipeline() {
     set bootstrapped(v) { bootstrapped = v; },
     get bridgeCandidateId() { return bridgeCandidateId; },
     set bridgeCandidateId(v) { bridgeCandidateId = v; },
+    get autoWikiProgress() { return autoWikiProgress; },
+    set autoWikiProgress(v) { autoWikiProgress = v; },
   };
 }
 

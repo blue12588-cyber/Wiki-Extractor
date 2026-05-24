@@ -31,6 +31,24 @@
     사용할 수 있습니다.)
   </p>
 
+  <div class="login-summary" role="note" aria-label="자동 모드 인증 요약">
+    <section>
+      <span class="summary-kicker">기본</span>
+      <strong>설치 없이 복붙 모드</strong>
+      <p>Codex가 없어도 원서 넣기, 후보 추출, 위키 검토·저장은 계속 됩니다.</p>
+    </section>
+    <section>
+      <span class="summary-kicker">선택</span>
+      <strong>자동 모드는 Codex 필요</strong>
+      <p>Codex CLI 설치는 사용자가 직접 합니다. 앱은 자동 설치하지 않습니다.</p>
+    </section>
+    <section>
+      <span class="summary-kicker">보안</span>
+      <strong>각자 자기 계정으로 로그인</strong>
+      <p>앱은 아이디·비밀번호를 받지 않고, 인증 파일을 만들거나 배포하지 않습니다.</p>
+    </section>
+  </div>
+
   <div class="state-row">
     <span class="state-label">현재 인증 상태</span>
     <AuthStateIndicator state={$authState} />
@@ -58,6 +76,44 @@
   .section-lede {
     margin: 0;
     font-size: 0.9375rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .login-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: var(--space-sm);
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--accent-oxblood);
+    border-radius: var(--radius-asymmetric);
+    background: var(--surface-elevated);
+  }
+
+  .login-summary section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    min-width: 0;
+  }
+
+  .summary-kicker {
+    font-family: var(--heading-family);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .login-summary strong {
+    font-family: var(--heading-family);
+    font-size: 0.875rem;
+    color: var(--text-primary);
+  }
+
+  .login-summary p {
+    margin: 0;
+    font-size: 0.8125rem;
     color: var(--text-secondary);
     line-height: 1.5;
   }

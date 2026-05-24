@@ -98,6 +98,12 @@ export const codexProvider: ExtractionProvider = {
       }
       return { ok: true, rawText };
     } catch (err) {
+      if (typeof err === 'string') {
+        return { ok: false, degraded: true, message: err };
+      }
+      if (err instanceof Error && err.message) {
+        return { ok: false, degraded: true, message: err.message };
+      }
       const e = err as LlmErr;
       return {
         ok: false,
