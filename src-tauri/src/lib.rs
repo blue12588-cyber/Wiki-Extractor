@@ -23,20 +23,21 @@
 //!       the 5b parse/validate/import pipeline, so the anti-forgery gate binds
 //!       the auto response identically).
 //!
-//! AC-7-relaxed boundary: `external_dep_paths` is the SOLE module authorized
-//! to use OS-user-directory APIs. See its module documentation for the rule.
-//! `codex_detect` delegates its only auth-path access to `external_dep_paths`.
+//! AC-7-relaxed boundary: `external_dep_paths` owns auth/tool discovery under
+//! user directories. App content storage is exe-local via `portable_data_root`
+//! so the release folder remains an independent unit.
 
-mod external_dep_paths;
+mod banner_audit;
 mod codex_detect;
 mod codex_login;
-mod oauth_child;
 mod dev_fallback;
-mod upload_cmd;
+mod external_dep_paths;
 mod extract_cmd;
-mod banner_audit;
-mod wiki_cmd;
 mod llm_cmd;
+mod oauth_child;
+mod portable_data_root;
+mod upload_cmd;
+mod wiki_cmd;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -79,6 +80,11 @@ pub fn run() {
             llm_cmd::llm_translate,
             llm_cmd::llm_extract_wiki,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                oauth_child::shutdown_oauth_child_sync();
+            }
+        });
 }

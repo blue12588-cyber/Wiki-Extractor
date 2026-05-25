@@ -46,10 +46,18 @@ pub struct LlmError {
 
 impl LlmError {
     fn degraded(kind: &str, reason: impl Into<String>) -> Self {
-        Self { kind: kind.into(), reason: reason.into(), degraded: true }
+        Self {
+            kind: kind.into(),
+            reason: reason.into(),
+            degraded: true,
+        }
     }
     fn hard(kind: &str, reason: impl Into<String>) -> Self {
-        Self { kind: kind.into(), reason: reason.into(), degraded: false }
+        Self {
+            kind: kind.into(),
+            reason: reason.into(),
+            degraded: false,
+        }
     }
 }
 
@@ -83,7 +91,11 @@ pub struct LlmConfig {
 }
 
 fn default_request_cfg() -> LlmRequestCfg {
-    LlmRequestCfg { temperature: 0.0, max_output_tokens: default_max_tokens(), timeout_ms: default_timeout() }
+    LlmRequestCfg {
+        temperature: 0.0,
+        max_output_tokens: default_max_tokens(),
+        timeout_ms: default_timeout(),
+    }
 }
 
 fn config_path() -> PathBuf {
@@ -164,6 +176,7 @@ Use one of these suggested actions: augment_existing, create_new, merge, defer, 
 Every candidate MUST include at least one evidence reference (chunk id / page / location) drawn from the provided chunk metadata; do NOT invent page numbers or bibliographic facts.
 Preserve original-language terms (Hebrew, Greek, Latin) and the source's exact wording in evidence_text.
 Candidate quality test: can this item be reused later without rereading the source chunk? If not, omit it.
+For Korean summaries/translations of biblical or theological material, use Catholic terminology: 판관기 not 사사기, 탈출기/탈출 not 출애굽기/출애굽, 마르코 복음 not 마가복음, 마태오 복음 not 마태복음, 루카 복음 not 누가복음, 주님/하느님 not 여호와, 의화 not 칭의/이신칭의, 은총 not 은혜.
 Return ONLY a JSON object: {"candidate_items":[{"local_candidate_id","title","type","category","summary","evidence_refs":[...],"suggested_action","evidence_text"}]}.
 Keep summaries concise; do not include long source quotations."#;
 
@@ -182,7 +195,8 @@ Return ONLY JSON: {"mappings":[{"local_candidate_id","outline_node_id":string|nu
 const TRANSLATE_SYSTEM_PROMPT: &str = r#"You translate source passages into Korean for a Catholic academic wiki.
 MANDATORY terminology policy (Catholic standard; Protestant terms are FORBIDDEN):
 - Use Catholic Korean biblical book names: 판관기 (Judges), 마르코 복음 (Mark), 마태오 복음 (Matthew), 탈출기 (Exodus), 창세기 (Genesis), 시편 (Psalms), 이사야서 (Isaiah).
-- 의화 (justification, NOT 칭의), 은총 (grace, NOT 은혜), 성령 (Holy Spirit), 성체 (Eucharist), 미사 (Mass).
+- 의화 (justification, NOT 칭의/이신칭의), 은총 (grace, NOT 은혜), 성령 (Holy Spirit), 성체 (Eucharist), 미사 (Mass).
+- Avoid Protestant/non-standard forms in Korean output: 사사기→판관기, 출애굽기/출애굽→탈출기/탈출, 마가복음→마르코 복음, 마태복음→마태오 복음, 누가복음→루카 복음, 여호와→주님/하느님.
 - Follow the Catholic Church's official Korean theological vocabulary.
 NEVER alter, paraphrase, or replace the ORIGINAL text — it is preserved verbatim by the caller. You ONLY produce the Korean translation as a separate string.
 Preserve original-language terms (Hebrew/Greek/Latin) inline with transliteration + meaning where helpful.
@@ -430,7 +444,9 @@ async fn read_response_body_lossy(mut resp: reqwest::Response) -> Result<String,
         match resp.chunk().await {
             Ok(Some(chunk)) => bytes.extend_from_slice(&chunk),
             Ok(None) => return Ok(String::from_utf8_lossy(&bytes).into_owned()),
-            Err(_err) if !bytes.is_empty() => return Ok(String::from_utf8_lossy(&bytes).into_owned()),
+            Err(_err) if !bytes.is_empty() => {
+                return Ok(String::from_utf8_lossy(&bytes).into_owned())
+            }
             Err(err) => return Err(err),
         }
     }
@@ -579,7 +595,10 @@ pub struct TranslateArgs {
 /// original is preserved by the caller — this only returns the translation.
 #[tauri::command]
 pub async fn llm_translate(args: TranslateArgs) -> Result<String, LlmError> {
-    let user = format!("Translate this source passage into Korean (Catholic terminology):\n\n{}", args.original_text);
+    let user = format!(
+        "Translate this source passage into Korean (Catholic terminology):\n\n{}",
+        args.original_text
+    );
     chat_completion(TRANSLATE_SYSTEM_PROMPT, user).await
 }
 
@@ -680,7 +699,9 @@ data: {"type":"response.content_part.done","part":{"type":"output_text","text":"
     #[test]
     fn endpoint_template_fills_base() {
         let cfg = load_config();
-        let filled = cfg.endpoint_template.replace("{base}", "http://127.0.0.1:9999/v1");
+        let filled = cfg
+            .endpoint_template
+            .replace("{base}", "http://127.0.0.1:9999/v1");
         // Responses API (openai-oauth proxy), NOT Chat Completions.
         assert_eq!(filled, "http://127.0.0.1:9999/v1/responses");
     }

@@ -38,16 +38,16 @@
 
   // Short human label per type. Domain-neutral (biblical_text -> religious_text
   // generalization is reflected here).
-  const TYPE_LABEL: Record<CandidateType, string> = {
-    concept: 'Concept',
-    argument: 'Argument',
-    method: 'Method',
-    scholar: 'Scholar',
-    religious_text: 'Source Text',
-    objection: 'Objection',
-    quotation: 'Quotation',
-    other: 'Other',
-  };
+	  const TYPE_LABEL: Record<CandidateType, string> = {
+	    concept: '개념',
+	    argument: '주장',
+	    method: '방법',
+	    scholar: '학자',
+	    religious_text: '원전/본문',
+	    objection: '반론',
+	    quotation: '인용',
+	    other: '기타',
+	  };
 
   // A short glyph per type so the type reads via shape, not color alone.
   const TYPE_GLYPH: Record<CandidateType, string> = {
@@ -85,34 +85,34 @@
   }
 </script>
 
-<section class="wiki-view" aria-label="Extracted candidate items" aria-busy={busy}>
+	<section class="wiki-view" aria-label="추출 후보 목록" aria-busy={busy}>
   {#if busy}
     <div class="busy-hairline" aria-hidden="true"></div>
   {/if}
 
   {#if !bundle}
-    <div class="empty" role="status">
-      <p class="empty-title">No source extracted yet</p>
-      <p class="empty-hint">
-        Add a plaintext, Markdown, or PDF source above. The extractor will list
-        every concept and quotation it finds — verbatim, no paraphrase.
-      </p>
-    </div>
-  {:else if item_count === 0}
-    <div class="empty" role="status">
-      <p class="empty-title">No candidate items found</p>
-      <p class="empty-hint">
-        The source <code>{bundle.source_id}</code> ({bundle.source_kind}) parsed
-        cleanly but produced no concept or quotation candidates.
-      </p>
-    </div>
-  {:else}
-    <header class="group-head">
-      <h2 class="group-title">Extracted from <code>{bundle.source_id}</code></h2>
-      <p class="group-meta">
-        <span class="kind-tag">{bundle.source_kind}</span>
-        <span class="count">{item_count} item{item_count === 1 ? '' : 's'}</span>
-        {#each type_tally as t (t.type)}
+	    <div class="empty" role="status">
+	      <p class="empty-title">아직 추출한 원문이 없습니다</p>
+	      <p class="empty-hint">
+	        위에서 텍스트, 마크다운, PDF 원문을 넣으면 추출기가 찾은 개념과 인용을
+	        원문 그대로 보여 줍니다.
+	      </p>
+	    </div>
+	  {:else if item_count === 0}
+	    <div class="empty" role="status">
+	      <p class="empty-title">추출 후보가 없습니다</p>
+	      <p class="empty-hint">
+	        원문 <code>{bundle.source_id}</code> ({bundle.source_kind})은 읽었지만,
+	        위키 후보로 삼을 만한 개념이나 인용을 찾지 못했습니다.
+	      </p>
+	    </div>
+	  {:else}
+	    <header class="group-head">
+	      <h2 class="group-title"><code>{bundle.source_id}</code>에서 추출</h2>
+	      <p class="group-meta">
+	        <span class="kind-tag">{bundle.source_kind}</span>
+	        <span class="count">후보 {item_count}개</span>
+	        {#each type_tally as t (t.type)}
           <span class="tally" title={TYPE_LABEL[t.type]}>
             <span class="tally-glyph" aria-hidden="true">{TYPE_GLYPH[t.type]}</span>
             {TYPE_LABEL[t.type]} ×{t.count}
@@ -136,6 +136,14 @@
             <p class="card-summary">{item.summary}</p>
           {/if}
 
+          {#if item.original_terms?.length}
+            <p class="term-list" aria-label="핵심 원어와 용어">
+              {#each item.original_terms as term (term)}
+                <span class="term">{term}</span>
+              {/each}
+            </p>
+          {/if}
+
           <blockquote class="evidence">
             {item.evidence_text}
           </blockquote>
@@ -147,7 +155,7 @@
             {#each item.evidence_refs as ref (ref)}
               <span class="loc ref" title={ref}>{formatEvidenceRef(ref)}</span>
             {/each}
-            <span class="loc id" title="local candidate id">#{item.local_candidate_id}</span>
+	            <span class="loc id" title="로컬 후보 ID">#{item.local_candidate_id}</span>
           </p>
         </li>
       {/each}
@@ -320,6 +328,23 @@
     font-size: 0.875rem;
     color: var(--text-secondary);
     line-height: 1.5;
+  }
+
+  .term-list {
+    margin: var(--space-sm) 0 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+  }
+
+  .term {
+    font-size: 0.75rem;
+    padding: 1px var(--space-sm);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
   }
 
   .evidence {

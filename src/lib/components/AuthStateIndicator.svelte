@@ -41,7 +41,7 @@
 
   const tooltips: Record<AuthIndicatorState, string> = {
     'unconfigured':
-      'Codex 인증 파일을 찾을 수 없습니다. 자동 모드를 쓰려면 `npm i -g @openai/codex` 후 `codex login`을 실행하세요. 복붙 모드는 그대로 사용할 수 있습니다.',
+      'Codex 인증 파일을 찾을 수 없습니다. 자동 모드를 쓰려면 Node.js 설치 후 `npm i -g @openai/codex`, `codex login`을 실행하세요. 후보별 복붙 모드는 그대로 사용할 수 있습니다.',
     'codex-detected':
       'Codex 인증 파일이 있습니다. 프록시가 시작되면 LLM 기능을 사용할 수 있습니다.',
     'oauth-child-up':

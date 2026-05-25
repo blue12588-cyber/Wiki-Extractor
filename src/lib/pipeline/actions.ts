@@ -33,19 +33,29 @@ import type { WikiEntry } from '$lib/wiki/wikiTypes';
 import { llmTranslate, llmConfig } from '$lib/llm/llmClient';
 import { autoModeActive } from '$lib/llm/modeStore.svelte';
 import { codexProvider, ensureProxy } from '$lib/llm/codexProvider';
-import { runCandidateEngine, type CandidateDecision } from '$lib/candidate/candidateEngine';
+import {
+  carryCandidateDecisions,
+  runCandidateEngine,
+  selectOfflineWikiCardsForSave,
+  type CandidateDecision,
+} from '$lib/candidate/candidateEngine';
 import { outlineKeywords } from '$lib/candidate/candidateEngine';
 import { tokenSimilarity } from '$lib/candidate/keywordMatch';
 import type { Chunk } from '$lib/chunk/chunker';
-import { buildGlobalPrompt, type PromptInput } from '$lib/bridge/promptBuilder';
+import { buildGlobalPrompt, PROMPT_VERSION, type PromptInput } from '$lib/bridge/promptBuilder';
 import { parseResponse } from '$lib/bridge/responseParser';
 import { validateResponse, type ValidatedCandidate } from '$lib/bridge/responseValidator';
 import { buildEntryFromValidated } from '$lib/bridge/wikiImport';
+import {
+  validatedCandidateToTrace,
+  type AutoLlmBatchTrace,
+} from '$lib/diagnostics/extractionReport';
 
 const AUTO_CHUNKS_PER_BATCH = 8;
 const AUTO_BATCHES_PER_RUN = 5;
 const OUTLINE_STORAGE_KEY = 'llmwiki:outline:v1';
 const AUTO_PROGRESS_PREFIX = 'llmwiki:auto-wiki-progress:';
+const NO_OUTLINE_SIGNATURE = 'outline:none';
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -94,10 +104,29 @@ function lsRemove(key: string): void {
   }
 }
 
+function shortHash(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+function outlineSignature(outline = pipeline.outline): string {
+  const nodes = outline?.nodes ?? [];
+  if (nodes.length === 0) return NO_OUTLINE_SIGNATURE;
+  const normalized = nodes
+    .map((n) => `${n.level}\t${n.label ?? ''}\t${n.title.trim().replace(/\s+/g, ' ')}`)
+    .join('\n');
+  return `outline:${shortHash(normalized)}`;
+}
+
 export function loadPersistedOutline() {
   const raw = lsGet(OUTLINE_STORAGE_KEY) ?? '';
   pipeline.outlineRaw = raw;
   pipeline.outline = raw.trim() ? parseOutline(raw) : null;
+  refreshAutoProgressForCurrentOutline();
 }
 
 export function onOutlineRawChanged(raw: string) {
@@ -109,22 +138,45 @@ export function onOutlineRawChanged(raw: string) {
   }
 }
 
-function autoProgressKey(source_id: string): string {
-  return `${AUTO_PROGRESS_PREFIX}${source_id}`;
+function autoProgressKey(source_id: string, signature = outlineSignature()): string {
+  return `${AUTO_PROGRESS_PREFIX}${source_id}:${signature}`;
 }
 
-function loadAutoProgress(source_id: string, totalBatches: number) {
-  const raw = lsGet(autoProgressKey(source_id));
+function clampInt(value: unknown, min: number, max: number, fallback = min): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.trunc(n), min), max);
+}
+
+function removeAutoProgressForSource(source_id: string) {
+  const prefix = `${AUTO_PROGRESS_PREFIX}${source_id}:`;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(prefix)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    /* best-effort */
+  }
+}
+
+function loadAutoProgress(source_id: string, totalBatches: number, signature = outlineSignature()) {
+  const raw = lsGet(autoProgressKey(source_id, signature));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<NonNullable<typeof pipeline.autoWikiProgress>>;
     if (parsed.source_id !== source_id) return null;
+    if (parsed.outline_signature && parsed.outline_signature !== signature) return null;
     return {
       source_id,
-      nextBatch: Math.min(Math.max(Number(parsed.nextBatch ?? 0), 0), totalBatches),
+      outline_signature: signature,
+      nextBatch: clampInt(parsed.nextBatch, 0, totalBatches),
       totalBatches,
-      imported: Math.max(Number(parsed.imported ?? 0), 0),
-      mapped: Math.max(Number(parsed.mapped ?? 0), 0),
+      imported: clampInt(parsed.imported, 0, Number.MAX_SAFE_INTEGER),
+      mapped: clampInt(parsed.mapped, 0, Number.MAX_SAFE_INTEGER),
       updated_at: String(parsed.updated_at ?? new Date().toISOString()),
     };
   } catch {
@@ -133,13 +185,33 @@ function loadAutoProgress(source_id: string, totalBatches: number) {
 }
 
 function saveAutoProgress(progress: NonNullable<typeof pipeline.autoWikiProgress>) {
-  pipeline.autoWikiProgress = progress;
-  lsSet(autoProgressKey(progress.source_id), JSON.stringify(progress));
+  const normalized = {
+    ...progress,
+    outline_signature: progress.outline_signature || outlineSignature(),
+  };
+  pipeline.autoWikiProgress = normalized;
+  lsSet(autoProgressKey(normalized.source_id, normalized.outline_signature), JSON.stringify(normalized));
+}
+
+function refreshAutoProgressForCurrentOutline() {
+  const source_id = pipeline.bundle?.source_id;
+  if (!source_id || pipeline.chunks.length === 0) return;
+  pipeline.autoWikiProgress = loadAutoProgress(
+    source_id,
+    Math.ceil(pipeline.chunks.length / AUTO_CHUNKS_PER_BATCH),
+    outlineSignature(),
+  );
+}
+
+function badTextQualityNotice(): string | null {
+  const q = pipeline.textQuality;
+  if (!q || q.level !== 'bad') return null;
+  return `${q.summary_ko} ${q.suggestion_ko} OCR 처리된 PDF나 txt/md로 다시 올린 뒤 추출·위키 생성을 진행하세요.`;
 }
 
 export function resetAutoWikiProgress() {
   const source_id = pipeline.bundle?.source_id ?? pipeline.autoWikiProgress?.source_id;
-  if (source_id) lsRemove(autoProgressKey(source_id));
+  if (source_id) removeAutoProgressForSource(source_id);
   pipeline.autoWikiProgress = null;
   pipeline.notice = '자동 LLM 진행 상태를 초기화했습니다. 다음 “위키 생성”은 첫 배치부터 시작합니다.';
 }
@@ -152,6 +224,7 @@ async function runExtraction(file: File, full: Uint8Array, source_id: string, zo
   pipeline.chunkStatus = null;
   pipeline.textQuality = null;
   pipeline.candidateCards = [];
+  pipeline.autoLlmTraces = [];
   try {
     const bundle = await extractCandidates({ source_id, filename: file.name, buffer: full });
     pipeline.bundle = bundle;
@@ -214,6 +287,7 @@ export function onOutlineParsed(parsed: ParsedOutline) {
   if (pipeline.outlineRaw.trim()) {
     lsSet(OUTLINE_STORAGE_KEY, pipeline.outlineRaw);
   }
+  refreshAutoProgressForCurrentOutline();
 }
 
 /**
@@ -229,14 +303,23 @@ export function runRuleEngine() {
     pipeline.notice = '먼저 원문을 업로드하세요.';
     return;
   }
+  const qualityNotice = badTextQualityNotice();
+  if (qualityNotice) {
+    pipeline.candidateCards = [];
+    pipeline.notice = qualityNotice;
+    return;
+  }
   pipeline.scoring = true;
   try {
-    const cards = runCandidateEngine({
-      bundle: pipeline.bundle,
-      chunks: pipeline.chunks,
-      outline: pipeline.outline,
-      existingEntries: pipeline.entries,
-    });
+    const cards = carryCandidateDecisions(
+      runCandidateEngine({
+        bundle: pipeline.bundle,
+        chunks: pipeline.chunks,
+        outline: pipeline.outline,
+        existingEntries: pipeline.entries,
+      }),
+      pipeline.candidateCards,
+    );
     pipeline.candidateCards = cards;
     pipeline.notice =
       cards.length > 0
@@ -353,8 +436,65 @@ function chunkBatches(chunks: Chunk[], size: number): Chunk[][] {
 }
 
 function candidateDedupeKey(cand: ValidatedCandidate): string {
-  const ev = cand.evidence.map((e) => e.chunk_id).sort().join('|');
-  return `${cand.title.trim().toLocaleLowerCase()}::${ev}`;
+  return [
+    cand.type ?? 'other',
+    cand.title.trim().replace(/\s+/g, ' ').toLocaleLowerCase(),
+    cand.summary_ko.trim().replace(/\s+/g, ' ').toLocaleLowerCase(),
+  ].join('\u0000');
+}
+
+function mergeStringList(left: string[] = [], right: string[] = [], max = 12): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of [...left, ...right]) {
+    const clean = value.trim();
+    const key = clean.toLocaleLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function mergeValidatedCandidates(
+  left: ValidatedCandidate,
+  right: ValidatedCandidate,
+): ValidatedCandidate {
+  const evidence = [...left.evidence];
+  const evidenceIndex = new Map(evidence.map((ev, idx) => [`${ev.chunk_id}\u0000${ev.quote}`, idx]));
+  for (const ev of right.evidence) {
+    const key = `${ev.chunk_id}\u0000${ev.quote}`;
+    const idx = evidenceIndex.get(key);
+    if (idx == null) {
+      evidenceIndex.set(key, evidence.length);
+      evidence.push(ev);
+    } else if (!evidence[idx].translation_ko && ev.translation_ko) {
+      evidence[idx] = { ...evidence[idx], translation_ko: ev.translation_ko };
+    }
+  }
+  const rejectedEvidence = [...left.rejectedEvidence];
+  const rejectedSeen = new Set(rejectedEvidence.map((ev) => `${ev.claimed_chunk_id}\u0000${ev.reason}`));
+  for (const ev of right.rejectedEvidence) {
+    const key = `${ev.claimed_chunk_id}\u0000${ev.reason}`;
+    if (rejectedSeen.has(key)) continue;
+    rejectedSeen.add(key);
+    rejectedEvidence.push(ev);
+  }
+  return {
+    ...left,
+    evidence,
+    rejectedEvidence,
+    standard_terms: mergeStringList(left.standard_terms, right.standard_terms, 12),
+    mapping_reason: left.mapping_reason || right.mapping_reason,
+    reuse_reason: left.reuse_reason || right.reuse_reason,
+    boundary_note: left.boundary_note || right.boundary_note,
+    reason: left.reason || right.reason,
+  };
+}
+
+function appendAutoLlmTrace(trace: AutoLlmBatchTrace) {
+  pipeline.autoLlmTraces = [...pipeline.autoLlmTraces, trace];
 }
 
 async function saveEntries(entries: WikiEntry[]) {
@@ -363,21 +503,29 @@ async function saveEntries(entries: WikiEntry[]) {
 }
 
 async function buildWikiOffline(bundle: NonNullable<typeof pipeline.bundle>) {
-  const cards = runCandidateEngine({
-    bundle,
-    chunks: pipeline.chunks,
-    outline: pipeline.outline,
-    existingEntries: pipeline.entries,
-  });
+  const cards = carryCandidateDecisions(
+    runCandidateEngine({
+      bundle,
+      chunks: pipeline.chunks,
+      outline: pipeline.outline,
+      existingEntries: pipeline.entries,
+    }),
+    pipeline.candidateCards,
+  );
   pipeline.candidateCards = cards;
-  const candidates: CandidateItem[] = cards
-    .filter((card) => card.scored.recommended_action !== 'ignore')
-    .map((card) => card.scored.candidate);
-  const excluded = bundle.candidate_items.length - candidates.length;
+  const saveCards = selectOfflineWikiCardsForSave(cards);
+  const candidates: CandidateItem[] = saveCards.map((card) => card.scored.candidate);
+  const structuralExcluded = cards.filter((card) => card.scored.recommended_action === 'ignore').length;
+  const decisionExcluded = cards.filter(
+    (card) =>
+      card.scored.recommended_action !== 'ignore' &&
+      (card.decision === 'held' || card.decision === 'discarded'),
+  ).length;
+  const excluded = structuralExcluded + decisionExcluded;
   if (candidates.length === 0) {
     pipeline.notice =
-      `위키로 저장할 재사용 후보를 찾지 못했습니다. 구조/목차성 후보 ${excluded}개는 ` +
-      '위키 항목으로 만들지 않고 분류용 구조 정보로만 둡니다.';
+      `위키로 저장할 재사용 후보를 찾지 못했습니다. 구조/목차성 후보 ${structuralExcluded}개와 ` +
+      `사용자가 보류/폐기한 후보 ${decisionExcluded}개는 위키 항목으로 만들지 않습니다.`;
     return;
   }
   const mappings = fallbackMappingsWithOutline(candidates);
@@ -386,11 +534,13 @@ async function buildWikiOffline(bundle: NonNullable<typeof pipeline.bundle>) {
     candidates,
     mappings,
     outlineTitleById: outlineTitleMap(),
+    chunks: chunksForSource(bundle.source_id),
   });
   await saveEntries(built);
   const mapped = mappings.filter((m) => m.outline_node_id).length;
-  const excludedNotice =
-    excluded > 0 ? ` 구조/목차성 후보 ${excluded}개는 위키 저장에서 제외했습니다.` : '';
+  const excludedNotice = excluded > 0
+    ? ` 구조/목차성 후보 ${structuralExcluded}개와 보류/폐기 후보 ${decisionExcluded}개는 위키 저장에서 제외했습니다.`
+    : '';
   pipeline.notice =
     `결정적 추출(오프라인)로 위키 항목을 생성했습니다. 목차 매핑 ${mapped}/${mappings.length}개. ` +
     'LLM 후보는 카드별 복붙/자동 추출에서 검증 후 가져올 수 있습니다.' +
@@ -415,7 +565,8 @@ async function tryBuildWikiAuto(bundle: NonNullable<typeof pipeline.bundle>): Pr
   }
 
   const batches = chunkBatches(sourceChunks, AUTO_CHUNKS_PER_BATCH);
-  const progress = loadAutoProgress(bundle.source_id, batches.length);
+  const progressSignature = outlineSignature();
+  const progress = loadAutoProgress(bundle.source_id, batches.length, progressSignature);
   const startBatch = progress?.nextBatch ?? 0;
   if (startBatch >= batches.length) {
     pipeline.notice =
@@ -425,13 +576,12 @@ async function tryBuildWikiAuto(bundle: NonNullable<typeof pipeline.bundle>): Pr
   }
   const endBatch = Math.min(startBatch + AUTO_BATCHES_PER_RUN, batches.length);
   const schema = outlineKeywords(pipeline.outline, []);
-  const importable: ValidatedCandidate[] = [];
-  const seen = new Set<string>();
+  const importableByKey = new Map<string, ValidatedCandidate>();
   let totalCandidates = 0;
-  let recoveredBatches = 0;
   let skippedBatches = 0;
   let structuralRejected = 0;
-  let completedBatches = 0;
+  let advancedBatches = 0;
+  let incompleteBatches = 0;
   let stopReason: string | null = null;
 
   for (let i = startBatch; i < endBatch; i++) {
@@ -441,25 +591,71 @@ async function tryBuildWikiAuto(bundle: NonNullable<typeof pipeline.bundle>): Pr
       `(이번 실행 ${i - startBatch + 1}/${endBatch - startBatch}, 청크 ${(batch[0]?.order ?? -1) + 1}-${(batch[batch.length - 1]?.order ?? -1) + 1}, 응답당 후보 최대 8개)`;
 
     const prompt = buildGlobalPrompt({ chunks: batch, schema });
+    const traceBase: AutoLlmBatchTrace = {
+      source_id: bundle.source_id,
+      batch_index: i + 1,
+      total_batches: batches.length,
+      chunk_orders: batch.map((ch) => ch.order),
+      chunk_ids: batch.map((ch) => ch.chunk_id),
+      prompt_version: PROMPT_VERSION,
+      prompt_char_count: prompt.length,
+      raw_response: null,
+      provider_ok: false,
+      provider_error: null,
+      parse_ok: false,
+      parse_error: null,
+      parse_recovered: false,
+      parse_recovered_count: null,
+      validation_shape_ok: null,
+      validation_top_level_error: null,
+      candidates: [],
+    };
     const extraction = await codexProvider.runExtraction(prompt);
     if (!extraction.ok) {
       stopReason = extraction.message;
+      appendAutoLlmTrace({
+        ...traceBase,
+        provider_error: extraction.message,
+      });
       break;
     }
-    completedBatches += 1;
+    traceBase.provider_ok = true;
+    traceBase.raw_response = extraction.rawText;
 
     const parsed = parseResponse(extraction.rawText);
     if (!parsed.ok) {
       skippedBatches += 1;
-      continue;
+      stopReason = parsed.message;
+      appendAutoLlmTrace({
+        ...traceBase,
+        parse_error: parsed.message,
+      });
+      break;
     }
-    if (parsed.recovered) recoveredBatches += 1;
+    traceBase.parse_ok = true;
+    traceBase.parse_recovered = parsed.recovered === true;
+    traceBase.parse_recovered_count = parsed.recoveredCount ?? null;
+    if (parsed.recovered) {
+      incompleteBatches += 1;
+      skippedBatches += 1;
+      stopReason =
+        'LLM 응답 JSON이 중간에 잘려 일부 후보만 복구되었습니다. 이 배치는 진행 저장하지 않고 다음 실행에서 다시 시도합니다.';
+      appendAutoLlmTrace(traceBase);
+      break;
+    }
 
-    const validation = validateResponse(parsed.value, batch.map((c) => c.chunk_id));
+    const validation = validateResponse(parsed.value, batch);
+    traceBase.validation_shape_ok = validation.shapeOk;
+    traceBase.validation_top_level_error = validation.topLevelError;
+    traceBase.candidates = validation.candidates.map(validatedCandidateToTrace);
     if (!validation.shapeOk) {
       skippedBatches += 1;
-      continue;
+      stopReason = validation.topLevelError ?? 'LLM 응답 형식이 올바르지 않습니다.';
+      appendAutoLlmTrace(traceBase);
+      break;
     }
+    appendAutoLlmTrace(traceBase);
+    advancedBatches += 1;
     totalCandidates += validation.candidates.length;
     structuralRejected += validation.candidates.filter((cand) =>
       cand.violations.some((v) => v.includes('구조 정보 후보 제외')),
@@ -467,19 +663,63 @@ async function tryBuildWikiAuto(bundle: NonNullable<typeof pipeline.bundle>): Pr
 
     for (const cand of validation.importable) {
       const key = candidateDedupeKey(cand);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      importable.push({ ...cand, index: i * 100 + cand.index });
+      const indexed = { ...cand, index: i * 1_000_000 + cand.index };
+      const previous = importableByKey.get(key);
+      importableByKey.set(key, previous ? mergeValidatedCandidates(previous, indexed) : indexed);
     }
   }
 
-  const nextBatch = startBatch + completedBatches;
+  const nextBatch = startBatch + advancedBatches;
+  const importable = [...importableByKey.values()].sort((a, b) => a.index - b.index);
 
-  if (importable.length === 0 && completedBatches === 0) {
+  if (importable.length === 0) {
+    if (advancedBatches > 0) {
+      const cumulativeImported = progress?.imported ?? 0;
+      const cumulativeMapped = progress?.mapped ?? 0;
+      saveAutoProgress({
+        source_id: bundle.source_id,
+        outline_signature: progressSignature,
+        nextBatch,
+        totalBatches: batches.length,
+        imported: cumulativeImported,
+        mapped: cumulativeMapped,
+        updated_at: new Date().toISOString(),
+      });
+      const recoveryNotice =
+        incompleteBatches > 0
+          ? ` 잘린 JSON 배치 ${incompleteBatches}개는 진행 저장하지 않았습니다.`
+          : '';
+      const skippedNotice =
+        skippedBatches > 0 ? ` 파싱/형식 문제로 건너뛴 배치 ${skippedBatches}개.` : '';
+      const structuralNotice =
+        structuralRejected > 0
+          ? ` 목차/표제/저자명/참고문헌성 후보 ${structuralRejected}개는 구조 정보로 보고 제외했습니다.`
+          : '';
+      const stoppedNotice = stopReason ? ` 중간 중단: ${stopReason}` : '';
+      const nextNotice =
+        nextBatch < batches.length
+          ? ` 다음에 “위키 생성”을 다시 누르면 ${nextBatch + 1}/${batches.length} 배치부터 이어서 진행합니다.`
+          : ' 자동 LLM 배치를 모두 처리했습니다.';
+      pipeline.notice =
+        `자동 LLM 배치 ${startBatch + 1}-${nextBatch}/${batches.length}를 처리했습니다(한 번에 최대 ${AUTO_BATCHES_PER_RUN}배치). ` +
+        `이번 실행 후보 ${totalCandidates}개 중 위키로 가져올 후보는 없었습니다. 진행은 ${nextBatch}/${batches.length}까지 저장했습니다. ` +
+        `누적 ${cumulativeImported}개 가져옴, 목차 매핑 ${cumulativeMapped}개. ` +
+        '원문은 실제 chunk_id/quote에서 검증했고, 위조 chunk_id는 검증기에서 차단했습니다.' +
+        recoveryNotice +
+        skippedNotice +
+        structuralNotice +
+        stoppedNotice +
+        nextNotice;
+      if (stopReason) {
+        pipeline.notice += ' 자동 경로가 중간에 멈춰 오프라인 위키 생성으로 전환합니다.';
+        return false;
+      }
+      return true;
+    }
     const reason = stopReason ? `${stopReason} ` : '';
     pipeline.notice =
       `${reason}자동 LLM 후보 ${totalCandidates}개를 받았지만 근거 검증을 통과한 후보가 없습니다. ` +
-      '오프라인 위키 생성으로 전환합니다.';
+      '이번 자동 배치는 진행 저장하지 않고 오프라인 위키 생성으로 전환합니다.';
     return false;
   }
 
@@ -499,6 +739,7 @@ async function tryBuildWikiAuto(bundle: NonNullable<typeof pipeline.bundle>): Pr
   const cumulativeMapped = (progress?.mapped ?? 0) + mapped;
   saveAutoProgress({
     source_id: bundle.source_id,
+    outline_signature: progressSignature,
     nextBatch,
     totalBatches: batches.length,
     imported: cumulativeImported,
@@ -506,8 +747,8 @@ async function tryBuildWikiAuto(bundle: NonNullable<typeof pipeline.bundle>): Pr
     updated_at: new Date().toISOString(),
   });
   const recoveryNotice =
-    recoveredBatches > 0
-      ? ` JSON 일부 복구 배치 ${recoveredBatches}개는 완성 후보만 검증했습니다.`
+    incompleteBatches > 0
+      ? ` 잘린 JSON 배치 ${incompleteBatches}개는 진행 저장하지 않았습니다.`
       : '';
   const skippedNotice =
     skippedBatches > 0 ? ` 파싱/형식 문제로 건너뛴 배치 ${skippedBatches}개.` : '';
@@ -546,6 +787,11 @@ export async function buildWiki() {
   const bundle = pipeline.bundle;
   if (!bundle) {
     pipeline.notice = '먼저 원문을 업로드하세요.';
+    return;
+  }
+  const qualityNotice = badTextQualityNotice();
+  if (qualityNotice) {
+    pipeline.notice = qualityNotice;
     return;
   }
   pipeline.busy = true;
@@ -627,22 +873,6 @@ export function bridgePromptInput(): PromptInput | null {
     chunks: chunksForCandidate(id),
     schema: outlineKeywords(pipeline.outline, []),
   };
-}
-
-/**
- * The real uploaded chunk_ids the bridge validates evidence against — scoped to
- * the OPEN bridge candidate's own source. Evidence can therefore only bind
- * within the source the candidate came from; a real chunk_id from a different
- * loaded source is treated as unknown (rejected), preserving provenance.
- */
-export function bridgeKnownChunkIds(): string[] {
-  const id = pipeline.bridgeCandidateId;
-  if (!id) return [];
-  const card = pipeline.candidateCards.find(
-    (c) => c.scored.candidate.local_candidate_id === id,
-  );
-  if (!card) return [];
-  return chunksForSource(card.scored.candidate.source_id).map((c) => c.chunk_id);
 }
 
 /** AC-COPY: open the copy-paste bridge for one candidate (prompt copy origin). */

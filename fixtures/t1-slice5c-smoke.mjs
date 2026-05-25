@@ -291,6 +291,7 @@ async function autoImportPreserve() {
     original_not_model_quote: claim.original_text !== '자동 LLM이 만든 인용(원문 아님)',
     translated_is_summary_ko: claim.translated_text === cand.summary_ko,
     evidence_bound_to_chunk: claim.evidence_refs.some((r) => r.includes('chunk-real-0')),
+    original_terms_is_array: Array.isArray(entry.original_terms),
   };
   if (!report.status_draft) return fail(report, 'auto-imported entry not draft');
   if (!report.has_llm_tag) return fail(report, 'LLM provenance tag missing');
@@ -298,6 +299,7 @@ async function autoImportPreserve() {
   if (!report.original_not_model_quote) return fail(report, 'original_text leaked the auto model quote');
   if (!report.translated_is_summary_ko) return fail(report, 'translated_text is not the Catholic summary_ko');
   if (!report.evidence_bound_to_chunk) return fail(report, 'evidence not bound to real chunk_id on auto path');
+  if (!report.original_terms_is_array) return fail(report, 'original_terms field missing on auto-imported entry');
   pass(report);
 }
 
@@ -336,6 +338,51 @@ async function encapsulationScan() {
   if (!report.offline_zero_net_tokens) return fail(report, `offline provider has net/LLM tokens: ${JSON.stringify(offlineViolations)}`);
   if (!report.codex_no_raw_fetch) return fail(report, 'codex provider issues a raw fetch (must go through the Rust command only)');
   if (!report.auto_reuses_5b_bridge) return fail(report, 'autoExtract does not import the 5b bridge modules (reuse not proven)');
+  pass(report);
+}
+
+// AC-AUTO-EXTRACT progress: if a batch completes parsing/validation but all
+// candidates are rejected, the app must still advance the saved batch cursor.
+// Otherwise users can get stuck retrying the same structure-only batch forever.
+async function autoZeroImportProgress() {
+  const actions = readFileSync(resolve(ROOT, 'src/lib/pipeline/actions.ts'), 'utf8');
+  const zeroImportBranch = actions.match(/if \(importable\.length === 0\) \{[\s\S]*?const reason = stopReason/);
+  const branch = zeroImportBranch?.[0] ?? '';
+  const report = {
+    scenario: 'auto-zero-import-progress',
+    has_zero_import_branch: branch.length > 0,
+    advances_valid_empty_batch: /if \(advancedBatches > 0\)/.test(branch),
+    saves_progress_in_branch: /saveAutoProgress\(\{[\s\S]*?nextBatch/.test(branch),
+    returns_false_when_stopped:
+      /if \(stopReason\) \{[\s\S]*?오프라인 위키 생성으로 전환합니다[\s\S]*?return false;/.test(branch),
+    returns_true_for_clean_zero_import:
+      /if \(stopReason\)[\s\S]*?return false;[\s\S]*?return true;/.test(branch),
+    keeps_failure_fallback: /이번 자동 배치는 진행 저장하지 않고 오프라인 위키 생성으로 전환합니다/.test(actions),
+  };
+  if (!report.has_zero_import_branch) return fail(report, 'zero-import branch missing');
+  if (!report.advances_valid_empty_batch) return fail(report, 'valid zero-import batches do not get their own branch');
+  if (!report.saves_progress_in_branch) return fail(report, 'valid zero-import branch does not save nextBatch progress');
+  if (!report.returns_false_when_stopped) return fail(report, 'stopped zero-import branch does not fall back to offline');
+  if (!report.returns_true_for_clean_zero_import) return fail(report, 'clean zero-import branch no longer preserves progress without fallback');
+  if (!report.keeps_failure_fallback) return fail(report, 'transport/parse failure fallback message was lost');
+  pass(report);
+}
+
+async function autoProgressCoercion() {
+  const actions = readFileSync(resolve(ROOT, 'src/lib/pipeline/actions.ts'), 'utf8');
+  const loadProgress = actions.match(/function loadAutoProgress[\s\S]*?\n}\n/);
+  const body = loadProgress?.[0] ?? '';
+  const report = {
+    scenario: 'auto-progress-coercion',
+    has_clamp_helper: /function clampInt\(value: unknown/.test(actions),
+    next_batch_clamped: /nextBatch:\s*clampInt\(parsed\.nextBatch,\s*0,\s*totalBatches\)/.test(body),
+    imported_clamped: /imported:\s*clampInt\(parsed\.imported/.test(body),
+    mapped_clamped: /mapped:\s*clampInt\(parsed\.mapped/.test(body),
+  };
+  if (!report.has_clamp_helper) return fail(report, 'auto progress lacks a finite-integer clamp helper');
+  if (!report.next_batch_clamped) return fail(report, 'nextBatch can still become NaN/fractional');
+  if (!report.imported_clamped) return fail(report, 'imported progress can still become NaN/fractional');
+  if (!report.mapped_clamped) return fail(report, 'mapped progress can still become NaN/fractional');
   pass(report);
 }
 
@@ -379,6 +426,8 @@ const table = {
   'auto-graceful': autoGraceful,
   'offline-provider-noop': offlineProviderNoop,
   'auto-import-preserve': autoImportPreserve,
+  'auto-zero-import-progress': autoZeroImportProgress,
+  'auto-progress-coercion': autoProgressCoercion,
   'encapsulation-scan': encapsulationScan,
   'ready-line-parse': readyLineParse,
 };

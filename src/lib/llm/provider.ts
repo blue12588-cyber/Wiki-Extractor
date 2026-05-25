@@ -173,7 +173,7 @@ export async function startCodexLogin(deviceAuth = false): Promise<CodexLoginOut
     return {
       state: 'failed',
       message:
-        'Tauri 셸 외부(미리보기)에서는 ChatGPT 로그인을 시작할 수 없습니다. 설치된 앱에서 [ChatGPT로 로그인]을 눌러 주세요. 복붙 모드는 미리보기에서도 그대로 동작합니다.',
+        'Tauri 셸 외부(미리보기)에서는 ChatGPT 로그인을 시작할 수 없습니다. 설치된 앱에서 [ChatGPT로 로그인]을 눌러 주세요. 후보별 복붙 모드는 미리보기에서도 사용할 수 있습니다.',
     };
   }
   try {
@@ -182,7 +182,7 @@ export async function startCodexLogin(deviceAuth = false): Promise<CodexLoginOut
     return {
       state: 'failed',
       message:
-        'ChatGPT 로그인을 시작하지 못했습니다. 복붙 모드로 모든 기능을 그대로 쓸 수 있습니다(앱은 계속 동작합니다).',
+        'ChatGPT 로그인을 시작하지 못했습니다. 후보별 복붙 모드로 계속 정리할 수 있습니다(앱은 계속 동작합니다).',
     };
   }
 }
@@ -245,7 +245,7 @@ export async function detectCodex(): Promise<CodexDetectResult> {
     const reason = e instanceof Error && e.message ? e.message : String(e);
     return {
       snapshot: degradedSnapshot(`검출 호출 실패: ${reason}`),
-      error: `codex 검출을 실행하지 못했습니다(${reason}). 복붙 모드로 모든 기능을 그대로 쓸 수 있습니다. 잠시 후 [다시 검출]을 눌러 주세요.`,
+      error: `codex 검출을 실행하지 못했습니다(${reason}). 후보별 복붙 모드로 계속 정리할 수 있습니다. 잠시 후 [다시 검출]을 눌러 주세요.`,
     };
   }
 }
@@ -261,7 +261,7 @@ export function providerAvailabilities(detect: CodexDetectSnapshot): ProviderAva
   const codexReason = detect.available
     ? null
     : detect.codex_cli_missing
-      ? 'codex CLI가 설치되어 있지 않습니다. 자동 LLM 모드는 고급 사용자용입니다. 설치하지 않아도 복붙 모드로 모든 기능을 쓸 수 있습니다.'
+      ? 'codex CLI가 설치되어 있지 않습니다. 자동 LLM 모드는 고급 사용자용입니다. 설치하지 않아도 후보별 복붙 모드로 정리·검증할 수 있습니다.'
       : 'codex 로그인이 확인되지 않았습니다(codex login). 로그인하면 자동 모드를 쓸 수 있고, 안 해도 복붙 모드로 동작합니다.';
 
   return [

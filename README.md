@@ -1,8 +1,8 @@
 # llmwiki
 
-Desktop extraction app: Tauri 2 shell + SvelteKit (static) UI + Rust sidecar. Built to take user-uploaded sources (plaintext, Markdown, PDF) and produce candidate items for downstream wiki authoring.
+Desktop extraction app: Tauri 2 shell + SvelteKit (static) UI + Rust commands. Built to take user-uploaded sources (plaintext, Markdown, PDF), split them into chunks, extract academic wiki candidates, and let the user review evidence before saving draft wiki entries.
 
-**Status**: Slice 1 scaffold (round-3 closeout). Frontend builds; Rust backend lockfile resolved but full `tauri build` blocked by host toolchain gap (see §Known Slice 1 limits).
+**Status**: Offline extraction, copy-paste bridge, optional Codex/openai-oauth automatic extraction, diagnostic reports, and Windows Tauri bundles are implemented. Current local verification produces both MSI and NSIS installers.
 
 ## Stack
 
@@ -10,7 +10,7 @@ Desktop extraction app: Tauri 2 shell + SvelteKit (static) UI + Rust sidecar. Bu
 - **UI**: SvelteKit 2.57 + Svelte 5.55 (runes mode) + Vite 6.3
 - **Adapter**: `@sveltejs/adapter-static` (no SSR; Tauri serves the prerendered SPA from `build/` via `tauri://localhost`)
 - **TypeScript**: 5.9
-- **Sidecar (planned for Slice 2)**: Rust binary under `sidecar/` for extraction/parsing
+- **Rust backend**: Tauri commands under `src-tauri/src/` for upload validation, wiki persistence, Codex detection/login, and OAuth proxy lifecycle.
 
 ## Layout
 
@@ -19,8 +19,13 @@ Desktop extraction app: Tauri 2 shell + SvelteKit (static) UI + Rust sidecar. Bu
 +- src/                      SvelteKit source (routes, lib)
 |  +- routes/                page components + +layout.ts (prerender=true, ssr=false)
 |  +- lib/
-|     +- auth/               (Slice 2) OAuth PKCE state machine
-|     +- upload/             (Slice 2) drag/drop + magic-bytes validation
+|     +- bridge/             copy-paste / automatic LLM prompt, parse, validation, import
+|     +- candidate/          rule-engine scoring and candidate card model
+|     +- chunk/              deterministic source chunking
+|     +- components/         Korean UI components
+|     +- extract/            offline txt/md/pdf candidate extraction
+|     +- pipeline/           upload -> extract -> score -> build workflow state
+|     +- upload/             drag/drop + magic-bytes validation
 |
 +- src-tauri/                Tauri shell (Rust)
 |  +- src/                   lib.rs + main.rs
@@ -28,16 +33,8 @@ Desktop extraction app: Tauri 2 shell + SvelteKit (static) UI + Rust sidecar. Bu
 |  +- capabilities/          permission scopes
 |  +- Cargo.toml             pinned tauri 2.11.2, tauri-plugin-log 2
 |
-+- sidecar/                  (Slice 2) extraction sidecar (Rust)
-|  +- src/
-|  |  +- gates/              extraction gate dispatch (port from harness-core)
-|  |  +- extractor/          pattern + synthesizer passes
-|  |  +- path-resolver/      install-folder-relative path resolution
-|  |  +- sources/            UI-upload-driven source ingestion
-|  +- test/                  fixtures + integration tests
-|
-+- shared/schemas/           shared JSON-Schema (Slice 2; adapted subset of harness-core schemas)
-+- fixtures/                 test fixtures (plaintext/, markdown/, pdf/) — populated in Slice 2
++- shared/schemas/           shared JSON-Schema for candidate items
++- fixtures/                 deterministic smoke fixtures for extraction, bridge, diagnostics, auth/proxy
 +- docs/
 |  +- adaptation-from-harness-core.md   upstream commit ref + per-file diff policy
 +- build/                    SvelteKit static output (consumed by Tauri); regenerated on every npm run build
@@ -51,7 +48,7 @@ Desktop extraction app: Tauri 2 shell + SvelteKit (static) UI + Rust sidecar. Bu
 | npm    | 10.7.0                | bundled with Node 20.15 |
 | Rust   | 1.95.0 (stable)       | install via `rustup`; MSRV 1.77.2 per `src-tauri/Cargo.toml` |
 | Cargo  | 1.95.0                | bundled with Rust toolchain |
-| **Visual Studio Build Tools** (Windows) | **2019 or later, "Desktop development with C++" workload** | provides `link.exe` — required for `cargo build` on `x86_64-pc-windows-msvc`. **Currently absent on dev host as of round-3 close** — see §Known Slice 1 limits |
+| **Visual Studio Build Tools** (Windows) | **2019 or later, "Desktop development with C++" workload** | provides `link.exe` — required for `cargo build` on `x86_64-pc-windows-msvc` |
 
 ## Install
 
@@ -82,39 +79,66 @@ CI is expected to use `npm ci` and `cargo --locked` always. `npm install` and ba
 npm run dev
 
 # Full Tauri dev (UI + Rust shell, with hot-reload)
-# Requires MSVC linker (see §Known Slice 1 limits)
+# Requires MSVC linker
 npm run tauri dev
 ```
 
 ## Build
 
 ```powershell
-# Frontend only (static SPA into ./build/) — works today
+# Frontend only (static SPA into ./build/)
 npm run build
 
 # Full Tauri bundle (frontend + Rust shell + installer)
-# Requires MSVC linker; currently blocked
+# Requires MSVC linker
 npm run tauri build
 ```
 
-## Portability policy (AC-7)
+## Portability and auth policy
 
-- All runtime read/write paths must be resolved relative to the install folder (the Tauri executable's parent directory).
-- **Forbidden** in non-test code: `app_data_dir`, `app_local_data_dir`, `app_config_dir` (Tauri path-resolver helpers), and any direct read of `%APPDATA%`, `%LOCALAPPDATA%`, `%USERPROFILE%`, `$HOME`.
-- A static scan over `src/`, `src-tauri/src/`, `sidecar/` for those patterns is run as part of release gate. Round-3 close result: **0 hits** (only docs and this README reference the forbidden tokens).
-- User data lands in `<install-folder>/data/` (gitignored). Moving the install folder must not break the app — verified by §AC-PORTABLE in Slice 2.
+- User wiki data is kept local to the install/runtime workspace; original source text is preserved and translated text is stored separately.
+- Codex/OpenAI automatic mode is optional. The app may read Codex installation/login status and start an `openai-oauth` loopback proxy, but it must not write Codex `auth.json`.
+- If Codex/automatic extraction is unavailable, the offline extraction and copy-paste review path remain usable.
 
-## Known Slice 1 limits
+## Optional automatic LLM mode setup
 
-| AC | status | blocker |
-|---|---|---|
-| AC-1 scaffold builds (frontend) | satisfied | `npm run build` produces `build/` cleanly |
-| AC-1 scaffold builds (Tauri full bundle) | blocked | MSVC `link.exe` absent on dev host; install VS Build Tools 2019+ with C++ workload, or add `x86_64-pc-windows-gnu` target + MinGW |
-| AC-2 git + lockfiles | satisfied | `package-lock.json` + `src-tauri/Cargo.lock` both committed |
-| AC-7 portable (static scan) | satisfied (partial) | runtime relocation test deferred to Slice 2 (needs running app) |
-| AC-8 adaptation log | stub satisfied | substantive per-file diff deferred to Slice 2 |
-| AC-9 harness-core safety | satisfied | pre/post HEAD = `f7dddc38eab9004b2dfe73e8d6805de07dbbeb48` |
-| AC-LOCKFILE policy | satisfied (partial) | first lockfile commit + `npm ci`/`cargo --locked` policy documented; CI verification in Slice 2 |
-| AC-3 OAuth, AC-4 extraction, AC-5 PDF, AC-6 schema, AC-UPLOAD upload, AC-PORTABLE relocate | deferred to Slice 2 | per scope-reduction note |
+The default workflow does not require Node.js, Codex, or API keys: users can use
+the copy-paste mode with ChatGPT in a browser. Automatic mode is an advanced
+option and must be set up on each user's own PC.
+
+1. Install Node.js LTS from https://nodejs.org/ko, then reopen PowerShell.
+2. Confirm Node/npm are available:
+   ```powershell
+   node -v
+   npm -v
+   ```
+3. Install Codex CLI:
+   ```powershell
+   npm i -g @openai/codex
+   codex --version
+   ```
+4. Log in with the user's own ChatGPT account:
+   ```powershell
+   codex login
+   codex login status
+   ```
+5. In llmwiki, open the Login tab and run detection again. If automatic mode
+   fails or hits account limits, the copy-paste/offline path remains available.
+
+## Current verification snapshot
+
+The following commands are expected to pass on the current Windows development host:
+
+```powershell
+npm run check
+npm run build
+npm run tauri build
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+`npm run tauri build` writes installers to:
+
+- `src-tauri/target/release/bundle/msi/llmwiki_0.1.0_x64_en-US.msi`
+- `src-tauri/target/release/bundle/nsis/llmwiki_0.1.0_x64-setup.exe`
 
 See `docs/adaptation-from-harness-core.md` for the upstream provenance contract that Slice 2 must honor.

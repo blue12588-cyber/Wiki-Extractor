@@ -102,6 +102,22 @@ export interface ClaimVerbHit {
   lang: 'en' | 'ko';
 }
 
+function keepEnglishHit(text: string, start: number, end: number, match: string): boolean {
+  const lower = match.toLocaleLowerCase();
+  const before = text.slice(Math.max(0, start - 24), start).toLocaleLowerCase();
+  const after = text.slice(end, end + 24).toLocaleLowerCase();
+
+  if (/^shows?$|^showed$|^showing$/.test(lower) && /^\s+up\b/.test(after)) return false;
+  if (/^claims?$/.test(lower) && /\b(?:the|a|an|this|that|these|those|no)\s+$/.test(before)) {
+    return false;
+  }
+  if ((lower === 'defined' || lower === 'defining') && /-\s*$/.test(before)) return false;
+  if (lower === 'proposed' && /\b(?:the|a|an|this|that|these|those)\s+$/.test(before)) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Detect every assertion-verb occurrence in `text`. Deterministic and pure.
  * Returns hits in left-to-right document order (English scan then Korean scan,
@@ -114,6 +130,7 @@ export function detectClaimVerbs(text: string): ClaimVerbHit[] {
 
   EN_RE.lastIndex = 0;
   for (let m = EN_RE.exec(text); m !== null; m = EN_RE.exec(text)) {
+    if (!keepEnglishHit(text, m.index, m.index + m[0].length, m[0])) continue;
     hits.push({ match: m[0], lang: 'en' });
   }
   for (const re of KO_RES) {

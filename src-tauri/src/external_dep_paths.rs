@@ -126,7 +126,9 @@ fn home_from_userprofile() -> Option<PathBuf> {
 /// Step 3 of the fallback: combine `HOMEDRIVE` + `HOMEPATH` (Windows) into a
 /// home directory iff BOTH are present and non-empty. Returns `None` otherwise.
 fn home_from_homedrive_homepath() -> Option<PathBuf> {
-    let drive = env::var("HOMEDRIVE").ok().filter(|s| !s.trim().is_empty())?;
+    let drive = env::var("HOMEDRIVE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
     let path = env::var("HOMEPATH").ok().filter(|s| !s.trim().is_empty())?;
     // `HOMEDRIVE` is like `C:` and `HOMEPATH` is like `\Users\USER`; a plain
     // string concat yields the canonical `C:\Users\USER`.
@@ -256,9 +258,17 @@ mod tests {
 
         // Empty / whitespace USERPROFILE is treated as unset (no false home).
         env::set_var("USERPROFILE", "   ");
-        assert_eq!(home_from_userprofile(), None, "blank USERPROFILE must be ignored");
+        assert_eq!(
+            home_from_userprofile(),
+            None,
+            "blank USERPROFILE must be ignored"
+        );
         env::remove_var("USERPROFILE");
-        assert_eq!(home_from_userprofile(), None, "unset USERPROFILE must be None");
+        assert_eq!(
+            home_from_userprofile(),
+            None,
+            "unset USERPROFILE must be None"
+        );
 
         // Step 3: HOMEDRIVE + HOMEPATH combine into the canonical path.
         env::set_var("HOMEDRIVE", "C:");
@@ -271,10 +281,18 @@ mod tests {
 
         // Either half missing ⇒ None (no half-built path).
         env::remove_var("HOMEDRIVE");
-        assert_eq!(home_from_homedrive_homepath(), None, "missing HOMEDRIVE ⇒ None");
+        assert_eq!(
+            home_from_homedrive_homepath(),
+            None,
+            "missing HOMEDRIVE ⇒ None"
+        );
         env::set_var("HOMEDRIVE", "C:");
         env::remove_var("HOMEPATH");
-        assert_eq!(home_from_homedrive_homepath(), None, "missing HOMEPATH ⇒ None");
+        assert_eq!(
+            home_from_homedrive_homepath(),
+            None,
+            "missing HOMEPATH ⇒ None"
+        );
 
         // Restore.
         match saved_userprofile {

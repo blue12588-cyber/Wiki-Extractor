@@ -209,6 +209,10 @@ async function autoExtractPrompt() {
       p.includes('scholar') && p.includes('religious_text') && p.includes('objection') &&
       p.includes('quotation'),
     has_outline_classification: p.includes('schema_field') && (p.includes('목차') || p.includes('분류')),
+    has_domain_discretion:
+      p.includes('discipline_profile') && p.includes('discipline_unit') &&
+      p.includes('mapping_reason') && p.includes('reuse_reason') &&
+      p.includes('boundary_note') && p.includes('standard_terms'),
     keeps_chunk_id_antiforgery: p.includes('chunk_id') && /지어내지 마라|실제로 있는 id/.test(p),
     keeps_catholic: p.includes('가톨릭 용어'),
     keeps_verbatim: /원문.*그대로|축자|변경하지 마라/.test(p),
@@ -223,6 +227,7 @@ async function autoExtractPrompt() {
   if (!report.prompt_korean) return fail(report, 'prompt not Korean');
   if (!report.has_seven_types) return fail(report, 'prompt does not enumerate the academic 7 candidate types');
   if (!report.has_outline_classification) return fail(report, 'prompt does not ask for 목차/schema_field classification');
+  if (!report.has_domain_discretion) return fail(report, 'prompt does not expose cross-discipline judgment fields');
   if (!report.keeps_chunk_id_antiforgery) return fail(report, 'prompt dropped the chunk_id anti-forgery instruction');
   if (!report.keeps_catholic) return fail(report, 'prompt dropped the Catholic-terminology instruction');
   if (!report.keeps_verbatim) return fail(report, 'prompt dropped the verbatim/original-text-preservation instruction');
@@ -267,6 +272,8 @@ async function wslFallback() {
 // from a read-only detect; graceful degrade.
 async function proxyOrigin() {
   const rust = read('src-tauri/src/oauth_child.rs');
+  const prodRust = rust.split('#[cfg(test)]')[0];
+  const lib = read('src-tauri/src/lib.rs');
   const report = {
     scenario: 'proxy-origin',
     has_build_proxy_command: /fn build_proxy_command\(/.test(rust),
@@ -274,10 +281,29 @@ async function proxyOrigin() {
     wsl_branch:
       /origin == CodexOrigin::Wsl/.test(rust) &&
       /Command::new\("wsl\.exe"\)/.test(rust) &&
-      /"--", "npx", "openai-oauth", "--port", &port_arg/.test(rust),
+      /"--", "npx", "-y", "openai-oauth", "--port", &port_arg/.test(rust),
     windows_branch:
-      /Command::new\("cmd"\)/.test(rust) && /"\/C", "npx", "openai-oauth", "--port", &port_arg/.test(rust),
+      /Command::new\("cmd"\)/.test(rust) && /"\/C", "npx", "-y", "openai-oauth", "--port", &port_arg/.test(rust),
     resolves_origin_from_detect: /let origin = detect_codex\(\)\.origin/.test(rust),
+    probes_cached_before_spawn:
+      /probe_cached_proxy\(origin\)\.await/.test(rust) &&
+      /probe_cached_process/.test(rust) &&
+      /write_cached_proxy\(port, &url, origin, child\.id\(\)\)/.test(rust) &&
+      /current_user_marker/.test(rust) &&
+      /\/health/.test(rust),
+    cached_process_searches_port:
+      rust.includes('--port\\s+{port}\\b'),
+    generic_models_list_rejected:
+      !prodRust.includes('"object":"list"') && /is_openai_oauth_fingerprint/.test(rust),
+    proxy_cache_not_cwd: !/std::env::current_dir\(\)/.test(prodRust) && /std::env::temp_dir\(\)/.test(prodRust),
+    app_owned_job_cleanup:
+      /CreateJobObjectW/.test(rust) &&
+      /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/.test(rust) &&
+      /AssignProcessToJobObject/.test(rust) &&
+      /shutdown_oauth_child_sync/.test(rust),
+    app_exit_cleanup_hook:
+      /tauri::RunEvent::Exit/.test(lib) &&
+      /oauth_child::shutdown_oauth_child_sync\(\)/.test(lib),
     graceful_degrade: /set_status\(ChildStatus::Degraded/.test(rust) && /복붙 모드로 전환/.test(rust),
     bounded_timeout_kept: /READY_TIMEOUT_MS/.test(rust),
     has_branch_tests: /fn proxy_spawn_origin_branch_is_fixed_literal/.test(rust) && /fn build_proxy_command_branches_without_panic/.test(rust),
@@ -287,6 +313,12 @@ async function proxyOrigin() {
   if (!report.wsl_branch) return fail(report, 'WSL proxy spawn branch missing/incorrect (wsl.exe -- npx openai-oauth --port)');
   if (!report.windows_branch) return fail(report, 'Windows-native proxy spawn branch missing (cmd /C npx …)');
   if (!report.resolves_origin_from_detect) return fail(report, 'oauth_proxy_start does not resolve origin from a read-only detect');
+  if (!report.probes_cached_before_spawn) return fail(report, 'oauth proxy start does not probe app-owned cached localhost proxy before spawning');
+  if (!report.cached_process_searches_port) return fail(report, 'cached proxy reuse does not search for openai-oauth bound to the cached port');
+  if (!report.generic_models_list_rejected) return fail(report, 'cached proxy fingerprint still accepts generic OpenAI-compatible /models JSON');
+  if (!report.proxy_cache_not_cwd) return fail(report, 'oauth proxy cache is tied to process current_dir');
+  if (!report.app_owned_job_cleanup) return fail(report, 'app-spawned proxy is not guarded by a Windows kill-on-close Job Object');
+  if (!report.app_exit_cleanup_hook) return fail(report, 'Tauri app exit does not call the proxy shutdown hook');
   if (!report.graceful_degrade) return fail(report, 'proxy spawn does not degrade gracefully (Korean 복붙 fallback)');
   if (!report.bounded_timeout_kept) return fail(report, 'ready-timeout bound lost');
   if (!report.has_branch_tests) return fail(report, 'missing proxy origin-branch tests');
@@ -303,7 +335,8 @@ async function noAuthWriteDetect() {
 
   const writeApis = ['File::create', 'fs::write', 'write_all', 'OpenOptions', 'std::fs::write'];
   const detectWriteHits = writeApis.filter((t) => detectCode.includes(t));
-  const oauthWriteHits = writeApis.filter((t) => oauthCode.includes(t));
+  const oauthWriteHits = writeApis.filter((t) => t !== 'fs::write' && oauthCode.includes(t));
+  const oauthFsWriteHits = oauthCode.match(/fs::write/g) || [];
 
   // Reuse the SINGLE authoritative OS-user-dir pattern from the Rust sentinel.
   const sentinelSrc = read('src-tauri/src/external_dep_paths.rs');
@@ -316,6 +349,9 @@ async function noAuthWriteDetect() {
     sentinel_pattern_loaded: sentinelPattern.length > 0,
     detect_no_write_apis: detectWriteHits.length === 0,
     oauth_no_write_apis: oauthWriteHits.length === 0,
+    oauth_cache_write_is_runtime_only:
+      oauthFsWriteHits.length === 1 &&
+      /fn write_cached_proxy\(port: u16, url: &str, origin: CodexOrigin, pid: Option<u32>\)[\s\S]*?proxy_cache_path\(\)[\s\S]*?fs::write\(path, txt\.as_bytes\(\)\)/.test(oauthCode),
     detect_no_authjson_literal: !/auth\.json/.test(detectCode),
     oauth_no_authjson_literal: !/auth\.json/.test(oauthCode),
     detect_no_os_user_dir_tokens: !osUserDirRe.test(detectCode),
@@ -330,7 +366,8 @@ async function noAuthWriteDetect() {
   };
   if (!report.sentinel_pattern_loaded) return fail(report, 'could not load the OS-user-dir sentinel pattern');
   if (!report.detect_no_write_apis) return fail(report, `codex_detect.rs uses a file-write API: ${JSON.stringify(detectWriteHits)}`);
-  if (!report.oauth_no_write_apis) return fail(report, `oauth_child.rs uses a file-write API: ${JSON.stringify(oauthWriteHits)}`);
+  if (!report.oauth_no_write_apis) return fail(report, `oauth_child.rs uses a non-cache file-write API: ${JSON.stringify(oauthWriteHits)}`);
+  if (!report.oauth_cache_write_is_runtime_only) return fail(report, 'oauth_child.rs fs::write is not limited to the runtime proxy cache');
   if (!report.detect_no_authjson_literal) return fail(report, 'codex_detect.rs CODE references auth.json');
   if (!report.oauth_no_authjson_literal) return fail(report, 'oauth_child.rs CODE references auth.json');
   if (!report.detect_no_os_user_dir_tokens) return fail(report, 'codex_detect.rs introduces a forbidden OS-user-dir token');

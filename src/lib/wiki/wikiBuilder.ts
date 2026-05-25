@@ -6,14 +6,16 @@
  *            AC-TRANSLATE + AC-ANNOTATION.
  *
  * Original-text preservation: a claim's `original_text` is the candidate's
- * verbatim `evidence_text`. The translation (when available) goes into the
- * separate `translated_text` field. When translation is unavailable (offline /
+ * verbatim `source_text`. `evidence_text` may be a UI excerpt/context. The
+ * translation (when available) goes into the separate `translated_text` field.
+ * When translation is unavailable (offline /
  * degraded), `translated_text` is left empty and the original still shows.
  *
  * Pure functions; no I/O, no LLM call here (the LLM results are passed in).
  */
 
 import type { CandidateItem } from '../extract/candidateExtractor';
+import type { Chunk } from '../chunk/chunker';
 import type { WikiClaim, WikiEntry } from './wikiTypes';
 
 /** A user-editable mapping of candidate -> outline node (LLM or manual). */
@@ -31,16 +33,65 @@ function isoNow(): string {
   return new Date().toISOString();
 }
 
-function claimFromCandidate(c: CandidateItem, translations: TranslationMap): WikiClaim {
+function chunkForCandidate(c: CandidateItem, chunks: Chunk[]): Chunk | null {
+  return (
+    chunks.find(
+      (ch) =>
+        ch.source_id === c.source_id &&
+        c.span.start >= ch.location.char_start &&
+        c.span.start < ch.location.char_end,
+    ) ??
+    chunks.find(
+      (ch) =>
+        ch.source_id === c.source_id &&
+        c.span.start < ch.location.char_end &&
+        c.span.end > ch.location.char_start,
+    ) ??
+    null
+  );
+}
+
+function chunkEvidenceRef(c: CandidateItem, chunk: Chunk): string {
+  const localStart = Math.max(0, Math.min(c.span.start - chunk.location.char_start, chunk.text.length));
+  const line = chunk.text.slice(0, localStart).split('\n').length;
+  const page = chunk.location.page != null ? `#p${chunk.location.page}` : '';
+  return `${chunk.source_id}#${chunk.chunk_id}${page}#line${line}`;
+}
+
+function evidenceRefsForCandidate(c: CandidateItem, chunks: Chunk[]): string[] {
+  const chunk = chunkForCandidate(c, chunks);
+  if (!chunk) return c.evidence_refs;
+  const ref = chunkEvidenceRef(c, chunk);
+  return [ref, ...c.evidence_refs.filter((existing) => existing !== ref)];
+}
+
+function claimFromCandidate(c: CandidateItem, translations: TranslationMap, chunks: Chunk[]): WikiClaim {
+  const original_text = c.source_text ?? c.evidence_text;
   return {
     claim_id: c.local_candidate_id,
     statement: c.title,
     // Original is preserved verbatim; translation is separate (may be empty).
     translated_text: translations[c.local_candidate_id] ?? '',
-    original_text: c.evidence_text,
-    evidence_refs: c.evidence_refs,
+    original_text,
+    evidence_refs: evidenceRefsForCandidate(c, chunks),
     candidate_id: c.local_candidate_id,
   };
+}
+
+function uniqueOriginalTerms(candidates: CandidateItem[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    for (const term of c.original_terms ?? []) {
+      const clean = term.trim();
+      if (!clean) continue;
+      const key = clean.toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out.slice(0, 24);
 }
 
 /**
@@ -54,10 +105,13 @@ export function buildEntriesFromCandidates(opts: {
   candidates: CandidateItem[];
   mappings: CandidateMapping[];
   outlineTitleById: Record<string, string>;
+  /** Real chunks for the source. When present, offline claims are bound to chunk_id evidence. */
+  chunks?: Chunk[];
   translations?: TranslationMap;
   now?: string;
 }): WikiEntry[] {
   const translations = opts.translations ?? {};
+  const chunks = opts.chunks ?? [];
   const now = opts.now ?? isoNow();
   const mapById = new Map(opts.mappings.map((m) => [m.local_candidate_id, m]));
 
@@ -89,8 +143,9 @@ export function buildEntriesFromCandidates(opts: {
       status: 'draft',
       outline_node_id: isUnclassified ? null : node,
       summary: null,
-      claims: cands.map((c) => claimFromCandidate(c, translations)),
+      claims: cands.map((c) => claimFromCandidate(c, translations, chunks)),
       source_ids: [opts.source_id],
+      original_terms: uniqueOriginalTerms(cands),
       tags: [],
       related: [],
       created_from_candidates: cands.map((c) => c.local_candidate_id),

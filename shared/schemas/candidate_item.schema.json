@@ -79,9 +79,18 @@
       },
       "additionalProperties": false
     },
+    "source_text": {
+      "type": "string",
+      "description": "Exact verbatim source slice used for persisted WikiClaim.original_text. Unlike evidence_text, this field is not a UI excerpt."
+    },
     "evidence_text": {
       "type": "string",
-      "description": "Verbatim text fragment from the source supporting this candidate."
+      "description": "Display/diagnostic evidence excerpt from the source supporting this candidate. It may include surrounding context; source_text is the persistence-grade verbatim field."
+    },
+    "original_terms": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional source-visible Greek/Hebrew/Latin or technical terms that should survive promotion."
     },
     "target_wiki_hint": { "type": ["string", "null"] }
   },

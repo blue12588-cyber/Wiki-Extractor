@@ -128,8 +128,11 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
     gap: var(--space-md);
+  }
+  @media (min-width: 82rem) {
+    .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
 </style>

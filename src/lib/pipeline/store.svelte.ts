@@ -20,11 +20,13 @@ import type { ParsedOutline } from '$lib/outline/outlineParser';
 import type { WikiEntry } from '$lib/wiki/wikiTypes';
 import type { LlmConfigSnapshot } from '$lib/llm/llmClient';
 import type { CandidateCardModel } from '$lib/candidate/candidateEngine';
+import type { AutoLlmBatchTrace } from '$lib/diagnostics/extractionReport';
 
 export type TabId = 'main' | 'wiki' | 'login' | 'feedback';
 
 export interface AutoWikiProgress {
   source_id: string;
+  outline_signature: string;
   nextBatch: number;
   totalBatches: number;
   imported: number;
@@ -66,6 +68,7 @@ function createPipeline() {
    */
   let bridgeCandidateId = $state<string | null>(null);
   let autoWikiProgress = $state<AutoWikiProgress | null>(null);
+  let autoLlmTraces = $state<AutoLlmBatchTrace[]>([]);
 
   return {
     get bundle() { return bundle; },
@@ -100,6 +103,8 @@ function createPipeline() {
     set bridgeCandidateId(v) { bridgeCandidateId = v; },
     get autoWikiProgress() { return autoWikiProgress; },
     set autoWikiProgress(v) { autoWikiProgress = v; },
+    get autoLlmTraces() { return autoLlmTraces; },
+    set autoLlmTraces(v) { autoLlmTraces = v; },
   };
 }
 

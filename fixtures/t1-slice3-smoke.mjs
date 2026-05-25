@@ -13,6 +13,9 @@
  *   catholic-terminology   translate prompt forbids Protestant terms (Rust-side
  *                          prompt mirrored here as a doc check via config file)
  *   classify-fallback      no-LLM path still yields editable mappings/entries
+ *   chunk-crlf-defense     direct CRLF input is normalized before chunking so
+ *                          markdown headings and block text remain stable
+ *   chunk-pdf-page-break   PDF form-feed page boundary prevents cross-page chunks
  *
  * Usage: node --import tsx fixtures/t1-slice3-smoke.mjs <scenario>
  */
@@ -59,6 +62,65 @@ async function chunkDeterminism() {
   pass(report);
 }
 
+async function chunkCrlfDefense() {
+  const { chunkSource } = await import('../src/lib/chunk/chunker.ts');
+  const text = [
+    '# Covenant',
+    '',
+    'Concept: Covenant Theology - The source defines covenant theology as a reusable interpretive category.',
+    '',
+    'The author argues that covenant theology should be distinguished from a mere list of treaty parallels because the concept organizes claims about divine-human relationship.',
+  ].join('\r\n');
+  const normalizedText = text.replace(/\r\n?/g, '\n');
+  const chunks = await chunkSource({
+    source_id: 'crlf',
+    kind: 'markdown',
+    normalized_text: text,
+  });
+  const report = {
+    scenario: 'chunk-crlf-defense',
+    chunk_count: chunks.length,
+    no_cr_chars: chunks.every((chunk) => !chunk.text.includes('\r')),
+    heading_path_kept: chunks.some((chunk) => chunk.heading_path.includes('Covenant')),
+    has_concept_chunk: chunks.some((chunk) => chunk.text.includes('Covenant Theology')),
+    stable_locations: chunks.every((chunk) => chunk.location.char_end > chunk.location.char_start),
+    slice_matches_text: chunks.every((chunk) => normalizedText.slice(chunk.location.char_start, chunk.location.char_end) === chunk.text),
+  };
+  if (chunks.length < 1) return fail(report, 'CRLF input produced no chunks');
+  if (!report.no_cr_chars) return fail(report, 'CR characters leaked into chunk text');
+  if (!report.heading_path_kept) return fail(report, 'markdown heading path was not retained under CRLF input');
+  if (!report.has_concept_chunk) return fail(report, 'expected content chunk missing under CRLF input');
+  if (!report.stable_locations) return fail(report, 'CRLF chunk locations are invalid');
+  if (!report.slice_matches_text) return fail(report, 'chunk char ranges do not slice back to exact chunk text');
+  pass(report);
+}
+
+async function chunkPdfPageBreak() {
+  const { chunkSource } = await import('../src/lib/chunk/chunker.ts');
+  const text = 'Page one claim has no trailing newline\fPage two claim starts immediately';
+  const page2Start = text.indexOf('\f') + 1;
+  const chunks = await chunkSource({
+    source_id: 'pdf-pages',
+    kind: 'pdf',
+    normalized_text: text,
+    page_starts: [0, page2Start],
+  });
+  const report = {
+    scenario: 'chunk-pdf-page-break',
+    chunk_count: chunks.length,
+    pages: chunks.map((chunk) => chunk.location.page),
+    no_form_feed_in_text: chunks.every((chunk) => !chunk.text.includes('\f')),
+    no_cross_page_chunk: chunks.every((chunk) => chunk.text.includes('Page one') !== chunk.text.includes('Page two')),
+    slice_matches_text: chunks.every((chunk) => text.slice(chunk.location.char_start, chunk.location.char_end) === chunk.text),
+  };
+  if (chunks.length !== 2) return fail(report, `expected 2 page-bounded chunks, got ${chunks.length}`);
+  if (report.pages.join(',') !== '1,2') return fail(report, `expected page attribution 1,2, got ${report.pages.join(',')}`);
+  if (!report.no_form_feed_in_text) return fail(report, 'form-feed leaked into chunk text');
+  if (!report.no_cross_page_chunk) return fail(report, 'PDF chunk crossed a form-feed page boundary');
+  if (!report.slice_matches_text) return fail(report, 'PDF chunk char ranges do not slice back to exact chunk text');
+  pass(report);
+}
+
 async function outlineParse() {
   const { parseOutline } = await import('../src/lib/outline/outlineParser.ts');
   const text = `1. 서론
@@ -93,7 +155,7 @@ async function wikiRoundtrip() {
     category: 'extracted',
     status: 'draft',
     outline_node_id: 'n2',
-    summary: null,
+    summary: '저장 왕복에서 사라지면 안 되는 항목 요약',
     claims: [
       {
         claim_id: 'c1',
@@ -105,6 +167,7 @@ async function wikiRoundtrip() {
       },
     ],
     source_ids: ['src1'],
+    original_terms: ['Psalm', 'justifies by grace'],
     tags: ['psalm'],
     related: [],
     created_from_candidates: ['cand-abc'],
@@ -125,10 +188,12 @@ async function wikiRoundtrip() {
     title_ok: back.title === entry.title,
     outline_ok: back.outline_node_id === entry.outline_node_id,
     status_ok: back.status === entry.status,
+    summary_ok: back.summary === entry.summary,
+    original_terms_ok: JSON.stringify(back.original_terms) === JSON.stringify(entry.original_terms),
     claim_ok: claimOk,
     human_readable: md.includes('# 시편의 탄식') && md.includes('## 주장'),
   };
-  if (!report.title_ok || !report.outline_ok || !report.status_ok) return fail(report, 'frontmatter round-trip lost a field');
+  if (!report.title_ok || !report.outline_ok || !report.status_ok || !report.summary_ok || !report.original_terms_ok) return fail(report, 'frontmatter/body round-trip lost a field');
   if (!claimOk) return fail(report, 'claim round-trip lost a field (statement/translation/original/evidence)');
   if (!report.human_readable) return fail(report, 'markdown is not human-readable (missing heading/claims section)');
   pass(report);
@@ -230,6 +295,8 @@ async function classifyFallback() {
 const scenario = process.argv[2];
 const table = {
   'chunk-determinism': chunkDeterminism,
+  'chunk-crlf-defense': chunkCrlfDefense,
+  'chunk-pdf-page-break': chunkPdfPageBreak,
   'outline-parse': outlineParse,
   'wiki-roundtrip': wikiRoundtrip,
   'original-preserved': originalPreserved,

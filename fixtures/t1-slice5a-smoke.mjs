@@ -9,12 +9,15 @@
  *   rule-determinism     same bundle+chunks → byte-identical scored candidates
  *   claim-verbs          EN + KO assertion verbs detected; non-verbs ignored
  *   demote-patterns      footnote/biblio/toc/index/copyright → demoted+ignore
- *   structural-filter    TOC headings / standalone names are structure-only,
- *                       but scholar claims with assertion verbs survive.
+ *   structural-filter    TOC headings / standalone names / quote-only cards are
+ *                       structure/evidence-only, but scholar claims survive.
  *   classify-novelty     no existing wiki → create_new
  *   dedup-update-link    duplicate → update_existing; related → link_only
  *   schema-input         outline keyword raises schema-fit + appears in rationale
+ *   promotion-signals    original/core terms + boundary cues survive scoring and
+ *                        steer an existing hub update recommendation
  *   card-shape           every card carries action/why/locator/boundary (no score)
+ *   decision-propagation user 승인/보류/폐기 survives refresh and gates offline save
  *   offline-no-network   engine modules import zero net/LLM symbols (static)
  *
  * Usage: node --import tsx fixtures/t1-slice5a-smoke.mjs <scenario>
@@ -80,12 +83,14 @@ function mkEntry(over = {}) {
     summary: 'Concept hub for figural interpretation and retrospective recognition.',
     claims: [],
     source_ids: ['hays_2016'],
+    original_terms: ['figural interpretation', 'retrospective recognition'],
     tags: ['figural-interpretation', 'typology', 'retrospective-recognition'],
     related: [],
     created_from_candidates: [],
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     review_notes: null,
+    ...over,
   };
 }
 
@@ -118,16 +123,23 @@ async function claimVerbs() {
   const en = detectClaimVerbs('Hays argues and suggests; he also concludes. Arguably not a verb.');
   const ko = detectClaimVerbs('저자는 ~을 주장한다. 또한 새 개념을 정의한다. 결론짓는다.');
   const none = detectClaimVerbs('The cat sat on the mat. 고양이가 매트에 앉았다.');
+  const noisy = detectClaimVerbs('The example shows up later. The proposed model is well-defined but not a claim.');
+  const proposedVerb = detectClaimVerbs('Smith proposed that the model should be revised.');
   const report = {
     scenario: 'claim-verbs',
     en_matches: en.map((h) => h.match),
     ko_matches: ko.map((h) => h.match),
+    noisy_matches: noisy.map((h) => h.match),
     none_count: countClaimVerbs('The cat sat on the mat. 고양이가 매트에 앉았다.'),
+    noisy_count: noisy.length,
+    proposed_verb_count: proposedVerb.length,
     arguably_excluded: !en.some((h) => h.match.toLowerCase() === 'arguably'),
   };
   if (en.length < 3) return fail(report, `expected ≥3 EN verb hits, got ${en.length}`);
   if (ko.length < 3) return fail(report, `expected ≥3 KO verb hits, got ${ko.length}`);
   if (report.none_count !== 0) return fail(report, 'false-positive verb match on non-claim text');
+  if (report.noisy_count !== 0) return fail(report, 'false-positive verb match on phrasal/adjectival non-claims');
+  if (report.proposed_verb_count !== 1) return fail(report, 'verbal "proposed that" should still count as a claim verb');
   if (!report.arguably_excluded) return fail(report, '"arguably" wrongly matched "argue"');
   pass(report);
 }
@@ -173,6 +185,7 @@ async function demotePatterns() {
 
 async function structuralFilter() {
   const { structuralReasonForCandidate } = await import('../src/lib/candidate/structuralFilter.ts');
+  const { scoreCandidate } = await import('../src/lib/candidate/scoringEngine.ts');
   const chapter = structuralReasonForCandidate({
     title: 'CHAPTER 7 - Postscript: Portraits of Yahweh',
     summary: '제7장 - 후기: Yahweh의 초상들',
@@ -188,23 +201,96 @@ async function structuralFilter() {
     summary: 'Greenfield, “Hebrew Bible and Canaanite Literature,” 545-60; Hallo,',
     evidence_text: 'Greenfield, “Hebrew Bible and Canaanite Literature,” 545-60; Hallo,',
   });
+  const shortQuote = structuralReasonForCandidate({
+    title: 'other deities',
+    type: 'quotation',
+    summary: 'the other deities',
+    evidence_text: '"other deities"',
+  });
+  const longQuoteOnly = {
+    ...mkCandidate({
+      local_candidate_id: 'quote-only',
+      title: 'Israelite cultural identity',
+      type: 'quotation',
+      summary: 'The material culture of the region exhibits numerous common points between the Israelites and Canaanites.',
+      evidence_text:
+        'The material culture of the region exhibits numerous common points between the Israelites and Canaanites in the Iron I period.',
+    }),
+  };
+  const longQuote = structuralReasonForCandidate(longQuoteOnly);
+  const longQuoteScored = scoreCandidate(longQuoteOnly, [mkChunk()], new Set(), []);
   const scholarClaim = structuralReasonForCandidate({
     title: 'David Noel Freedman',
     summary: 'Freedman argues that Israelite religion must be read against its ancient Near Eastern context.',
     evidence_text: 'Freedman argues that Israelite religion must be read against its ancient Near Eastern context.',
   });
+  const typedScholarName = structuralReasonForCandidate({
+    title: 'David Noel Freedman',
+    type: 'scholar',
+    summary: 'DAVID NOEL FREEDMAN',
+    evidence_text: 'ASTRID B. BECK\nDAVID NOEL FREEDMAN',
+  });
+  const mistypedScholarName = structuralReasonForCandidate({
+    title: 'David Noel Freedman',
+    type: 'concept',
+    summary: 'DAVID NOEL FREEDMAN',
+    evidence_text: 'ASTRID B. BECK\nDAVID NOEL FREEDMAN',
+  });
+  const commaScholarName = structuralReasonForCandidate({
+    title: 'Levenson, J.',
+    type: 'concept',
+    summary: 'Levenson, J.',
+    evidence_text: 'Levenson, J.',
+  });
+  const particleScholarName = structuralReasonForCandidate({
+    title: 'von Rad',
+    type: 'concept',
+    summary: 'von Rad',
+    evidence_text: 'von Rad',
+  });
+  const shortAcademicConcepts = [
+    'Divine Kingship',
+    'Covenant Theology',
+    'Wisdom Literature',
+    'Source Criticism',
+    'Holy Spirit',
+    'Mount Sinai',
+  ].map((title) =>
+    structuralReasonForCandidate({
+      title,
+      type: 'concept',
+      summary: `${title} is a reusable academic concept in the source argument.`,
+      evidence_text: `${title} is a reusable academic concept in the source argument.`,
+    }),
+  );
   const report = {
     scenario: 'structural-filter',
     chapter_rejected: !!chapter,
     author_rejected: !!author,
     citation_rejected: !!citation,
+    short_quote_rejected: !!shortQuote,
+    long_quote_rejected: !!longQuote,
+    long_quote_action: longQuoteScored.recommended_action,
     scholar_claim_kept: scholarClaim === null,
-    reasons_korean: [chapter, author, citation].every((r) => typeof r === 'string' && /[가-힣]/.test(r)),
+    typed_scholar_name_rejected: !!typedScholarName,
+    mistyped_scholar_name_rejected: !!mistypedScholarName,
+    comma_scholar_name_rejected: !!commaScholarName,
+    particle_scholar_name_rejected: !!particleScholarName,
+    short_academic_concepts_kept: shortAcademicConcepts.every((r) => r === null),
+    reasons_korean: [chapter, author, citation, shortQuote, longQuote].every((r) => typeof r === 'string' && /[가-힣]/.test(r)),
   };
   if (!report.chapter_rejected) return fail(report, 'chapter heading was not rejected as structure-only');
   if (!report.author_rejected) return fail(report, 'standalone author name was not rejected as structure-only');
   if (!report.citation_rejected) return fail(report, 'bibliographic citation fragment was not rejected as structure-only');
+  if (!report.short_quote_rejected) return fail(report, 'short quotation shard was not rejected as structure-only');
+  if (!report.long_quote_rejected) return fail(report, 'long quote-only card was not rejected as evidence-only');
+  if (report.long_quote_action !== 'ignore') return fail(report, 'long quote-only card was not classified ignore');
   if (!report.scholar_claim_kept) return fail(report, 'scholar claim with assertion verb was wrongly rejected');
+  if (!report.typed_scholar_name_rejected) return fail(report, 'typed standalone scholar name was not rejected');
+  if (!report.mistyped_scholar_name_rejected) return fail(report, 'standalone scholar name mislabeled as concept was not rejected');
+  if (!report.comma_scholar_name_rejected) return fail(report, 'comma-style standalone scholar name was not rejected');
+  if (!report.particle_scholar_name_rejected) return fail(report, 'particle-style standalone scholar name was not rejected');
+  if (!report.short_academic_concepts_kept) return fail(report, 'short academic concepts were wrongly rejected as person names');
   if (!report.reasons_korean) return fail(report, 'structural rejection reasons are not Korean');
   pass(report);
 }
@@ -263,6 +349,46 @@ async function schemaInput() {
   pass(report);
 }
 
+async function promotionSignals() {
+  const { scoreCandidate } = await import('../src/lib/candidate/scoringEngine.ts');
+  const cand = mkCandidate({
+    local_candidate_id: 'promo',
+    title: 'Leitwort guardrail for thorn motif',
+    type: 'method',
+    summary: 'Lexical contact with ἀκάνθας is useful but does not prove typology by itself.',
+    evidence_text:
+      'Greek lexical contact with ἀκάνθας and ῥάμνος can identify comparison points, but it cannot establish evangelist intention by itself; stronger claims require textual criticism.',
+    original_terms: ['ἀκάνθας', 'ῥάμνος', 'leitwort', 'textual criticism'],
+  });
+  const existing = [
+    mkEntry({
+      id: 'e-gospel',
+      title: 'Leitwort thorn motif textual criticism hub',
+      summary: 'Hub for motif method and textual guardrails.',
+      tags: ['leitwort', 'thorn-motif', 'textual-criticism'],
+      original_terms: ['Leitwort', 'textual criticism', 'thorn motif'],
+    }),
+  ];
+  const scored = scoreCandidate(cand, [mkChunk()], new Set(['thorn', 'motif']), existing);
+  const report = {
+    scenario: 'promotion-signals',
+    action: scored.recommended_action,
+    target: scored.target_entry_id,
+    novelty_score: scored.sub.novelty,
+    why_has_terms: scored.rationale.why.some((w) => w.includes('핵심 원어/용어')),
+    boundary_has_guardrail: scored.rationale.boundary.some((w) => w.includes('경계 신호')),
+    schema_fit_positive: scored.sub.schema_fit > 0,
+  };
+  if (scored.recommended_action !== 'update_existing') {
+    return fail(report, `promotion-like method card should update existing hub, got ${scored.recommended_action}`);
+  }
+  if (scored.target_entry_id !== 'e-gospel') return fail(report, 'existing hub was not targeted');
+  if (!report.why_has_terms) return fail(report, 'original/core terms not surfaced in rationale');
+  if (!report.boundary_has_guardrail) return fail(report, 'boundary cue not surfaced in rationale');
+  if (!report.schema_fit_positive) return fail(report, 'original terms/topic terms did not contribute to schema fit');
+  pass(report);
+}
+
 async function cardShape() {
   const { runCandidateEngine, ACTION_LABEL } = await import('../src/lib/candidate/candidateEngine.ts');
   const bundle = {
@@ -302,6 +428,53 @@ async function cardShape() {
   pass(report);
 }
 
+async function decisionPropagation() {
+  const {
+    carryCandidateDecisions,
+    selectOfflineWikiCardsForSave,
+  } = await import('../src/lib/candidate/candidateEngine.ts');
+
+  const mkCard = (id, action = 'create_new', decision = 'pending') => ({
+    scored: {
+      candidate: mkCandidate({ local_candidate_id: id, title: `Candidate ${id}` }),
+      recommended_action: action,
+    },
+    decision,
+  });
+
+  const fresh = [mkCard('approved'), mkCard('held'), mkCard('discarded'), mkCard('pending')];
+  const previous = [
+    mkCard('approved', 'create_new', 'approved'),
+    mkCard('held', 'create_new', 'held'),
+    mkCard('discarded', 'create_new', 'discarded'),
+  ];
+  const carried = carryCandidateDecisions(fresh, previous);
+  const selected = selectOfflineWikiCardsForSave([...carried, mkCard('ignored-approved', 'ignore', 'approved')]);
+  const selectedIds = selected.map((card) => card.scored.candidate.local_candidate_id);
+  const decisionById = Object.fromEntries(
+    carried.map((card) => [card.scored.candidate.local_candidate_id, card.decision]),
+  );
+  const report = {
+    scenario: 'decision-propagation',
+    decisionById,
+    selectedIds,
+    held_excluded: !selectedIds.includes('held'),
+    discarded_excluded: !selectedIds.includes('discarded'),
+    approved_included: selectedIds.includes('approved'),
+    pending_legacy_included: selectedIds.includes('pending'),
+    ignore_excluded_even_if_approved: !selectedIds.includes('ignored-approved'),
+  };
+  if (report.decisionById.approved !== 'approved') return fail(report, 'approved decision was not carried');
+  if (report.decisionById.held !== 'held') return fail(report, 'held decision was not carried');
+  if (report.decisionById.discarded !== 'discarded') return fail(report, 'discarded decision was not carried');
+  if (!report.held_excluded) return fail(report, 'held candidate selected for offline wiki save');
+  if (!report.discarded_excluded) return fail(report, 'discarded candidate selected for offline wiki save');
+  if (!report.approved_included) return fail(report, 'approved candidate was not selected');
+  if (!report.pending_legacy_included) return fail(report, 'pending non-ignore candidate no longer preserves one-click flow');
+  if (!report.ignore_excluded_even_if_approved) return fail(report, 'ignore candidate selected for offline wiki save');
+  pass(report);
+}
+
 async function offlineNoNetwork() {
   // Static guard: the rule-engine modules must not import network/LLM symbols.
   const files = [
@@ -334,7 +507,9 @@ const table = {
   'classify-novelty': classifyNovelty,
   'dedup-update-link': dedupUpdateLink,
   'schema-input': schemaInput,
+  'promotion-signals': promotionSignals,
   'card-shape': cardShape,
+  'decision-propagation': decisionPropagation,
   'offline-no-network': offlineNoNetwork,
 };
 const fn = table[scenario];

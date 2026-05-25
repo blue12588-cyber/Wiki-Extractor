@@ -67,7 +67,7 @@ const RULES: Rule[] = [
   {
     kind: 'footnote',
     test: (t) => FOOTNOTE_RE.test(t),
-    reason: '각주 패턴(번호 + 서지 약물)으로 위키 후보가 아닙니다',
+    reason: '각주 패턴(번호 + 서지 묶음)으로 위키 후보가 아닙니다',
   },
   {
     kind: 'bibliography',

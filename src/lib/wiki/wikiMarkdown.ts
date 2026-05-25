@@ -60,6 +60,7 @@ export function entryToMarkdown(entry: WikiEntry): string {
     `status: ${entry.status}`,
     `outline_node_id: ${entry.outline_node_id ?? ''}`,
     `source_ids: ${fmList(entry.source_ids)}`,
+    `original_terms: ${fmList(entry.original_terms)}`,
     `tags: ${fmList(entry.tags)}`,
     `related: ${fmList(entry.related)}`,
     `created_from_candidates: ${fmList(entry.created_from_candidates)}`,
@@ -117,6 +118,24 @@ export function markdownToEntry(md: string): WikiEntry {
       i++;
     }
     i++; // skip closing delim
+  }
+
+  // Summary: entryToMarkdown writes it between the H1 title and the claims
+  // heading. Preserve that body text on round-trip instead of treating it as
+  // display-only prose.
+  let summary: string | null = null;
+  {
+    let j = i;
+    while (j < lines.length && lines[j].trim().length === 0) j++;
+    if (lines[j]?.startsWith('# ')) j++;
+    while (j < lines.length && lines[j].trim().length === 0) j++;
+    const buf: string[] = [];
+    while (j < lines.length && !lines[j].startsWith('## 주장')) {
+      buf.push(lines[j]);
+      j++;
+    }
+    const clean = buf.join('\n').trim();
+    summary = clean.length > 0 ? clean : null;
   }
 
   // Claims: scan for "### " statements followed by meta + annotation block.
@@ -179,9 +198,10 @@ export function markdownToEntry(md: string): WikiEntry {
     category: fm.category ?? 'extracted',
     status,
     outline_node_id: fm.outline_node_id ? fm.outline_node_id : null,
-    summary: null,
+    summary,
     claims,
     source_ids: splitList(fm.source_ids ?? ''),
+    original_terms: splitList(fm.original_terms ?? ''),
     tags: splitList(fm.tags ?? ''),
     related: splitList(fm.related ?? ''),
     created_from_candidates: splitList(fm.created_from_candidates ?? ''),

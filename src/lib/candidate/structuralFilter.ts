@@ -16,7 +16,7 @@ export interface StructuralEvidenceLike {
 
 export interface StructuralCandidateLike {
   title?: string;
-  type?: string;
+  type?: string | null;
   schema_field?: string;
   summary?: string;
   summary_ko?: string;
@@ -54,6 +54,45 @@ const PERSON_STOPWORDS = new Set([
   'hebrew',
 ]);
 
+const PERSON_NAME_PARTICLES = new Set(['de', 'del', 'der', 'la', 'le', 'van', 'von']);
+
+const ACADEMIC_CONCEPT_STOPWORDS = new Set([
+  'apocalypse',
+  'canon',
+  'christology',
+  'church',
+  'covenant',
+  'criticism',
+  'deuteronomistic',
+  'divine',
+  'ecclesiology',
+  'eschatology',
+  'exile',
+  'form',
+  'gospel',
+  'holy',
+  'kingship',
+  'law',
+  'literature',
+  'mount',
+  'narrative',
+  'priestly',
+  'prophecy',
+  'redaction',
+  'ritual',
+  'sacrifice',
+  'scripture',
+  'sinai',
+  'source',
+  'spirit',
+  'temple',
+  'theology',
+  'tradition',
+  'wisdom',
+]);
+
+const SHORT_QUOTATION_FRAGMENT_MAX = 32;
+
 function lines(text: string): string[] {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 }
@@ -74,18 +113,36 @@ function isLikelyPersonNameOnly(title: string): boolean {
   const tokens = wordTokens(title.replace(/[,:;]+$/g, ''));
   if (tokens.length < 2 || tokens.length > 5) return false;
   let fullNameParts = 0;
+  let initialParts = 0;
+  let particleParts = 0;
   for (const token of tokens) {
-    const cleaned = token.replace(/\.$/, '');
+    const cleaned = token.replace(/[.,:;]+$/g, '');
     const lower = cleaned.toLocaleLowerCase();
+    if (PERSON_NAME_PARTICLES.has(lower)) {
+      particleParts += 1;
+      continue;
+    }
     if (PERSON_STOPWORDS.has(lower)) return false;
-    if (/^[A-Z]\.?$/.test(token)) continue;
-    if (/^[A-Z][a-zA-Z.'-]+$/.test(token)) {
+    if (ACADEMIC_CONCEPT_STOPWORDS.has(lower)) return false;
+    if (/^[A-Z]$/.test(cleaned)) {
+      initialParts += 1;
+      continue;
+    }
+    if (/^[A-Z][a-zA-Z.'-]+$/.test(cleaned)) {
       fullNameParts += 1;
       continue;
     }
     return false;
   }
-  return fullNameParts >= 2;
+  return fullNameParts >= 2 || (fullNameParts >= 1 && initialParts >= 1) || (particleParts > 0 && fullNameParts >= 1);
+}
+
+function shouldApplyPersonNameFilter(type: string | null | undefined): boolean {
+  // The LLM may mislabel a standalone author/editor name as "concept" or
+  // "argument". Apply the name-only guard broadly, while the academic concept
+  // stopword escape in isLikelyPersonNameOnly keeps short real concepts such as
+  // "Divine Kingship" and "Source Criticism" importable.
+  return type !== 'quotation';
 }
 
 function isAllCapsAuthorList(text: string): boolean {
@@ -138,6 +195,20 @@ export function structuralReasonForCandidate(input: StructuralCandidateLike): st
     return '구조 정보 후보 제외: 참고문헌/각주 인용 조각은 위키 지식 카드가 아닙니다.';
   }
 
+  if (
+    input.type === 'quotation' &&
+    claimVerbCount === 0 &&
+    compact(title).length > 0 &&
+    compact(title).length < SHORT_QUOTATION_FRAGMENT_MAX &&
+    hasOnlyShortLabelLines(body || evidence || title)
+  ) {
+    return '구조 정보 후보 제외: 너무 짧은 인용 파편은 위키 지식 카드가 아닙니다.';
+  }
+
+  if (input.type === 'quotation' && claimVerbCount === 0) {
+    return '구조 정보 후보 제외: 직접 인용만 있는 항목은 위키 지식 카드가 아닙니다. 주장·개념·방법과 연결된 근거로만 사용하세요.';
+  }
+
   const titleLooksSection = SECTION_MARKER_RE.test(title);
   const bodyLooksSection = SECTION_MARKER_RE.test(firstLine(body)) || SECTION_MARKER_RE.test(firstLine(evidence));
   if ((titleLooksSection || bodyLooksSection) && claimVerbCount === 0 && hasOnlyShortLabelLines(body || title)) {
@@ -145,6 +216,7 @@ export function structuralReasonForCandidate(input: StructuralCandidateLike): st
   }
 
   if (
+    shouldApplyPersonNameFilter(input.type) &&
     isLikelyPersonNameOnly(title) &&
     claimVerbCount === 0 &&
     (isAllCapsAuthorList(body) || isNearDuplicate(title, body) || hasOnlyShortLabelLines(body))

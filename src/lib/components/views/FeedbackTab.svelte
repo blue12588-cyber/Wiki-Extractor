@@ -19,6 +19,11 @@
 <script lang="ts">
   import { feedbackConfig } from '$lib/feedback/config';
   import { submitFeedback, type SubmitResult } from '$lib/feedback/submit';
+  import { pipeline } from '$lib/pipeline/store.svelte';
+  import {
+    buildExtractionDiagnosticReport,
+    summarizeExtractionReport,
+  } from '$lib/diagnostics/extractionReport';
 
   // Cooldown after a send completes (success OR failure) before the button
   // re-enables. Guards against accidental double-submits. No contract number
@@ -28,6 +33,7 @@
   let title = $state('');
   let message = $state('');
   let email = $state('');
+  let include_report = $state(true);
 
   let sending = $state(false);
   let cooling = $state(false);
@@ -37,6 +43,46 @@
   let cooldown_timer: ReturnType<typeof setTimeout> | null = null;
 
   const disabled = $derived(sending || cooling);
+  const has_report_context = $derived(
+    Boolean(
+      pipeline.bundle ||
+        pipeline.chunks.length ||
+        pipeline.candidateCards.length ||
+        pipeline.autoLlmTraces.length,
+    ),
+  );
+  const report_summary = $derived(
+    summarizeExtractionReport(
+      buildExtractionDiagnosticReport({
+        bundle: pipeline.bundle,
+        chunks: pipeline.chunks,
+        textQuality: pipeline.textQuality,
+        outline: pipeline.outline,
+        entries: pipeline.entries,
+        candidateCards: pipeline.candidateCards,
+        llmCfg: pipeline.llmCfg,
+        autoWikiProgress: pipeline.autoWikiProgress,
+        autoLlmTraces: pipeline.autoLlmTraces,
+        includeAdvancedDebug: false,
+      }),
+    ),
+  );
+
+  function current_report() {
+    if (!include_report) return null;
+    return buildExtractionDiagnosticReport({
+      bundle: pipeline.bundle,
+      chunks: pipeline.chunks,
+      textQuality: pipeline.textQuality,
+      outline: pipeline.outline,
+      entries: pipeline.entries,
+      candidateCards: pipeline.candidateCards,
+      llmCfg: pipeline.llmCfg,
+      autoWikiProgress: pipeline.autoWikiProgress,
+      autoLlmTraces: pipeline.autoLlmTraces,
+      includeAdvancedDebug: true,
+    });
+  }
 
   function start_cooldown() {
     cooling = true;
@@ -65,7 +111,15 @@
     let res: SubmitResult;
     try {
       const cfg = feedbackConfig();
-      res = await submitFeedback({ title, message, email }, cfg.endpoint);
+      res = await submitFeedback(
+	        {
+	          title,
+	          message,
+	          email,
+	          diagnosticReport: current_report(),
+	        },
+        cfg.endpoint,
+      );
     } finally {
       sending = false;
       start_cooldown();
@@ -77,6 +131,7 @@
       title = '';
       message = '';
       email = '';
+      include_report = true;
     } else {
       // Degrade: show the Korean message; PRESERVE the user's input (no reset).
       result_notice = { tone: 'error', text: res.message };
@@ -132,6 +187,32 @@
         placeholder="answer@example.com"
         autocomplete="email"
       />
+    </div>
+
+    <div class="report-options">
+      <label class="check-row" for="fb-report">
+        <input
+          id="fb-report"
+          type="checkbox"
+          bind:checked={include_report}
+        />
+        <span>추출 진단 리포트 포함</span>
+      </label>
+      <p class="report-note">
+        {#if has_report_context}
+          기본으로 체크되어 있으며, 체크되어 있으면 추출 진단 리포트가 함께 전송됩니다:
+          {report_summary}. 후보별 제목·유형·목차 매핑·근거 위치·짧은 문맥·채택/차단
+          판정과 LLM 파싱 실패 사유를 보냅니다.
+        {:else}
+          기본으로 체크되어 있으며, 체크되어 있으면 추출 진단 리포트가 함께 전송됩니다.
+          아직 업로드/추출 이력이 없으면 현재 앱 상태와 빈 추출 이력만 들어갑니다.
+        {/if}
+        로컬 전체 경로, API 키, OAuth 토큰, auth.json 내용, 원본 파일명은 포함하지 않습니다.
+      </p>
+      <p class="report-note">
+        포함 시 raw LLM 응답, 프롬프트 버전, 배치 번호, 일부 원문 청크 발췌까지 함께
+        들어갑니다. 체크를 끄면 진단 리포트 전체를 보내지 않습니다.
+      </p>
     </div>
 
     <div class="action-row">
@@ -190,6 +271,39 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
+  }
+
+  .report-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-soft);
+    background: var(--surface-muted);
+  }
+
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    font-family: var(--heading-family);
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .check-row input {
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--accent-oxblood);
+  }
+
+  .report-note {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
   }
 
   .field-label {

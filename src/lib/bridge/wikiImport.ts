@@ -23,6 +23,7 @@
  */
 
 import type { Chunk } from '../chunk/chunker';
+import { extractOriginalTerms } from '../candidate/originalTerms';
 import { structuralReasonForCandidate } from '../candidate/structuralFilter';
 import type { WikiClaim, WikiEntry } from '../wiki/wikiTypes';
 import type { ValidatedCandidate } from './responseValidator';
@@ -46,7 +47,12 @@ function claimsFor(
   cand: ValidatedCandidate,
   chunksById: Map<string, Chunk>,
 ): WikiClaim[] {
-  return cand.evidence.map((ev, i) => {
+  const claims: WikiClaim[] = [];
+  const seen = new Set<string>();
+  for (const ev of cand.evidence) {
+    const dedupeKey = `${ev.chunk_id}\u0000${ev.quote.trim()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     const chunk = chunksById.get(ev.chunk_id);
     if (!chunk) {
       // Hard refusal: cannot restore verbatim original text for this chunk_id
@@ -60,11 +66,11 @@ function claimsFor(
     // Either way original_text comes from source text, never from paraphrase.
     const quote = ev.quote.trim();
     const original_text = quote && chunk.text.includes(quote) ? quote : chunk.text;
-    return {
-      claim_id: `${cand.index}-${i}-${ev.chunk_id}`,
+    claims.push({
+      claim_id: `${cand.index}-${claims.length}-${ev.chunk_id}`,
       statement: cand.title,
-      // Catholic-terminology Korean translation of the evidence passage when
-      // supplied; summary_ko remains a fallback for older/manual responses.
+      // Standard Korean translation of the evidence passage when supplied;
+      // summary_ko remains a fallback for older/manual responses.
       translated_text: ev.translation_ko || cand.summary_ko,
       // Preserved verbatim source.
       original_text,
@@ -73,8 +79,9 @@ function claimsFor(
         `${chunk.source_id}#${ev.chunk_id}${chunk.location.page != null ? `#p${chunk.location.page}` : ''}`,
       ],
       candidate_id: LLM_SOURCE_TAG,
-    };
-  });
+    });
+  }
+  return claims;
 }
 
 export interface ImportOptions {
@@ -107,6 +114,17 @@ export function buildEntryFromValidated(
   const now = isoNow(opts.now);
   const chunksById = new Map(opts.chunks.map((c) => [c.chunk_id, c]));
   const claims = claimsFor(cand, chunksById);
+  const original_terms = extractOriginalTerms([
+    cand.title,
+    cand.discipline_unit ?? '',
+    cand.schema_field,
+    cand.summary_ko,
+    cand.reason,
+    cand.reuse_reason ?? '',
+    cand.boundary_note ?? '',
+    ...(cand.standard_terms ?? []),
+    ...claims.map((claim) => claim.original_text),
+  ].join('\n'));
   const titleSlug = cand.title.trim().toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-+|-+$/g, '');
   const id = `${opts.source_id}-llm-${cand.index}-${titleSlug || 'entry'}`;
 
@@ -119,12 +137,19 @@ export function buildEntryFromValidated(
     summary: cand.reason || null,
     claims,
     source_ids: [opts.source_id],
+    original_terms,
     // LLM-provenance tag (출처 표시) + the schema_field ChatGPT chose.
     tags: [LLM_SOURCE_TAG, ...(cand.schema_field ? [cand.schema_field] : [])],
     related: [],
     created_from_candidates: [LLM_SOURCE_TAG],
     created_at: now,
     updated_at: now,
-    review_notes: cand.confidence ? `ChatGPT 신뢰도: ${cand.confidence}` : null,
+    review_notes: [
+      cand.confidence ? `ChatGPT 신뢰도: ${cand.confidence}` : '',
+      cand.discipline_profile ? `전공 판단: ${cand.discipline_profile}` : '',
+      cand.discipline_unit ? `전공 단위: ${cand.discipline_unit}` : '',
+      cand.reuse_reason ? `재사용 이유: ${cand.reuse_reason}` : '',
+      cand.boundary_note ? `경계: ${cand.boundary_note}` : '',
+    ].filter(Boolean).join(' / ') || null,
   };
 }

@@ -5,7 +5,8 @@
  * Authority: agreed_contract.json#AC-7-relaxed.
  *
  * Scans non-test, non-vendor source under the target tree for the forbidden
- * OS-user-directory pattern. Exactly one exemption: `src-tauri/src/external_dep_paths.rs`.
+ * OS-user-directory pattern. The single exemption is the narrow auth/tool
+ * discovery boundary: `src-tauri/src/external_dep_paths.rs`.
  * Vendor subtree `node_modules/openai-oauth/**` is also exempted.
  *
  * Excluded paths: node_modules, target, build, .svelte-kit, .git, src-tauri/target.

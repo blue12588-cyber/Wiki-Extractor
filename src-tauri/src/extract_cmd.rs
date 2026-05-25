@@ -57,5 +57,9 @@ pub fn extract_fixture(path: String) -> Result<FixtureBytes, ExtractError> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "fixture.bin".into());
     let source_id_hint = format!("{}-len-{}", filename, bytes.len());
-    Ok(FixtureBytes { source_id_hint, filename, bytes_b64: b64encode(&bytes) })
+    Ok(FixtureBytes {
+        source_id_hint,
+        filename,
+        bytes_b64: b64encode(&bytes),
+    })
 }

@@ -106,19 +106,57 @@ function segmentBlocks(text: string, kind: SourceKind): RawBlock[] {
   let offset = 0;
   let acc: string[] = [];
   let accStart = 0;
+  let accEnd = 0;
 
   const flush = (endOffset: number) => {
     if (acc.length === 0) return;
     const joined = acc.join('\n');
+    const exactEnd = accEnd > accStart && accEnd <= endOffset ? accEnd : endOffset;
     if (joined.trim().length >= MIN_CHUNK_CHARS) {
       blocks.push({
         text: joined,
         char_start: accStart,
-        char_end: endOffset,
+        char_end: exactEnd,
         heading_path: headingStack.map((h) => h.title),
       });
     }
     acc = [];
+    accEnd = 0;
+  };
+
+  const consumeLineFragment = (
+    ln: string,
+    lineStart: number,
+    lineEnd: number,
+    nextOffset: number,
+  ) => {
+    // Heading boundary (markdown only; plaintext/pdf headings are rare and we
+    // do not guess them to stay deterministic and faithful to the source).
+    const hm = kind === 'markdown' ? ln.match(HEADING_RE) : null;
+    if (hm) {
+      flush(accEnd || (lineStart > accStart ? lineStart : accStart));
+      const level = hm[1].length;
+      const title = hm[2].trim();
+      while (headingStack.length && headingStack[headingStack.length - 1].level >= level) {
+        headingStack.pop();
+      }
+      headingStack.push({ level, title });
+      // The heading line itself starts a new block context; next non-blank line
+      // begins the body accumulation.
+      accStart = nextOffset;
+      return;
+    }
+
+    if (ln.trim().length === 0) {
+      // blank line: paragraph cluster boundary
+      flush(accEnd || lineStart);
+      accStart = nextOffset;
+      return;
+    }
+
+    if (acc.length === 0) accStart = lineStart;
+    acc.push(ln);
+    accEnd = lineEnd;
   };
 
   for (let li = 0; li < lines.length; li++) {
@@ -128,38 +166,25 @@ function segmentBlocks(text: string, kind: SourceKind): RawBlock[] {
     // advance offset past this line incl. the \n separator (except possibly last)
     offset = lineEnd + (li < lines.length - 1 ? 1 : 0);
 
-    // Heading boundary (markdown only; plaintext/pdf headings are rare and we
-    // do not guess them to stay deterministic and faithful to the source).
-    const hm = kind === 'markdown' ? ln.match(HEADING_RE) : null;
-    if (hm) {
-      flush(lineStart > accStart ? lineStart : accStart);
-      const level = hm[1].length;
-      const title = hm[2].trim();
-      while (headingStack.length && headingStack[headingStack.length - 1].level >= level) {
-        headingStack.pop();
+    let fragmentStart = lineStart;
+    const fragments = ln.split('\f');
+    for (let fi = 0; fi < fragments.length; fi++) {
+      const fragment = fragments[fi];
+      const fragmentEnd = fragmentStart + fragment.length;
+      const hasPageBreakAfter = fi < fragments.length - 1;
+      const nextOffset = hasPageBreakAfter ? fragmentEnd + 1 : offset;
+      consumeLineFragment(fragment, fragmentStart, fragmentEnd, nextOffset);
+      if (hasPageBreakAfter) {
+        flush(accEnd || fragmentEnd);
+        accStart = fragmentEnd + 1;
+        fragmentStart = fragmentEnd + 1;
       }
-      headingStack.push({ level, title });
-      // The heading line itself starts a new block context; next non-blank line
-      // begins the body accumulation.
-      accStart = lineEnd + 1;
-      continue;
     }
-
-    if (ln.trim().length === 0) {
-      // blank line: paragraph cluster boundary
-      flush(lineStart);
-      accStart = offset;
-      continue;
-    }
-
-    if (acc.length === 0) accStart = lineStart;
-    acc.push(ln);
   }
-  flush(text.length);
+  flush(accEnd || text.length);
 
-  // Page-form-feed handling: PDFs join pages with '\f' inside the normalized
-  // text. We do NOT split on '\f' here (paragraph/blank-line boundaries already
-  // segment); page attribution is done from page_starts at chunk-build time.
+  // PDFs join pages with '\f'. Treat it as a hard boundary so one chunk cannot
+  // silently span pages while still preserving exact char offsets into text.
   return blocks;
 }
 
@@ -198,7 +223,8 @@ function splitOversize(block: RawBlock): RawBlock[] {
  */
 export async function chunkSource(input: ChunkInput): Promise<Chunk[]> {
   const pageStarts = input.page_starts ?? [];
-  const raw = segmentBlocks(input.normalized_text, input.kind);
+  const normalizedText = input.normalized_text.replace(/\r\n?/g, '\n');
+  const raw = segmentBlocks(normalizedText, input.kind);
   const expanded: RawBlock[] = [];
   for (const b of raw) expanded.push(...splitOversize(b));
 

@@ -34,11 +34,11 @@
   import { autoExtractCandidate } from '$lib/llm/autoExtract';
   import { codexProvider } from '$lib/llm/codexProvider';
 
+  type BridgeChunk = PromptInput['chunks'][number];
+
   type Props = {
     /** The candidate + chunks + schema this panel drives. */
     input: PromptInput;
-    /** Real uploaded chunk_ids — the anti-forgery binding anchor. */
-    knownChunkIds: string[];
     /** True when the advanced auto-LLM provider is the effective mode. When
      *  false the panel is the pure 5b copy-paste bridge (无损). */
     autoMode?: boolean;
@@ -48,9 +48,10 @@
     onclose?: () => void;
   };
 
-  let { input, knownChunkIds, autoMode = false, onimport, onclose }: Props = $props();
+  let { input, autoMode = false, onimport, onclose }: Props = $props();
 
   let prompt = $derived(buildPrompt(input));
+  let chunkLookup = $derived(new Map(input.chunks.map((chunk) => [chunk.chunk_id, chunk])));
   let pasted = $state('');
   let result = $state<ValidationResult | null>(null);
   let copyState = $state<'idle' | 'copied' | 'failed'>('idle');
@@ -93,7 +94,7 @@
       };
       return;
     }
-    result = validateResponse(parsed.value, knownChunkIds);
+    result = validateResponse(parsed.value, input.chunks);
   }
 
   // 5c 자동 추출: 같은 5b 프롬프트를 codex_oauth_proxy provider 로 보내고,
@@ -103,7 +104,7 @@
     autoRunning = true;
     autoNotice = null;
     try {
-      const outcome = await autoExtractCandidate(codexProvider, input, knownChunkIds);
+      const outcome = await autoExtractCandidate(codexProvider, input, input.chunks);
       if (outcome.ok) {
         // 검증 결과는 복붙 경로와 동일한 ValidationResult — 같은 UI/가져오기 사용.
         result = outcome.result;
@@ -128,11 +129,25 @@
     next.add(cand.index);
     imported = next;
   }
+
+  function evidenceLocation(chunk: BridgeChunk | null, quote: string): string {
+    if (!chunk) return '';
+    const parts: string[] = [];
+    if (chunk.location.page != null) parts.push(`p.${chunk.location.page}`);
+    parts.push(`문자 ${chunk.location.char_start}-${chunk.location.char_end}`);
+    const quoteOffset = chunk.text.indexOf(quote);
+    if (quoteOffset >= 0) {
+      const lineInChunk = chunk.text.slice(0, quoteOffset).split('\n').length;
+      parts.push(`청크 ${lineInChunk}행`);
+    }
+    if (chunk.heading_path.length > 0) parts.push(chunk.heading_path.join(' > '));
+    return parts.join(' · ');
+  }
 </script>
 
-<section class="bridge" aria-label="ChatGPT 복붙 브릿지">
+<section class="bridge" aria-label="ChatGPT 후보별 복붙 브릿지">
   <header class="bridge-head">
-    <h4 class="bridge-title">ChatGPT 복붙 브릿지</h4>
+    <h4 class="bridge-title">ChatGPT 후보별 복붙 브릿지</h4>
     <button type="button" class="link-btn" onclick={() => onclose?.()}>닫기</button>
   </header>
 
@@ -227,22 +242,59 @@
               {#if c.schema_field}
                 <p class="result-row"><span class="rk">분류</span> {c.schema_field}</p>
               {/if}
+              {#if c.discipline_profile || c.discipline_unit}
+                <p class="result-row">
+                  <span class="rk">전공 판단</span>
+                  {[c.discipline_profile, c.discipline_unit].filter(Boolean).join(' · ')}
+                </p>
+              {/if}
+              {#if c.mapping_reason}
+                <p class="result-row"><span class="rk">매핑 이유</span> {c.mapping_reason}</p>
+              {/if}
+              {#if c.reuse_reason}
+                <p class="result-row"><span class="rk">재사용 이유</span> {c.reuse_reason}</p>
+              {/if}
+              {#if c.boundary_note}
+                <p class="result-row"><span class="rk">경계</span> {c.boundary_note}</p>
+              {/if}
+              {#if c.standard_terms.length}
+                <p class="result-row">
+                  <span class="rk">표준 용어</span>
+                  {c.standard_terms.join(', ')}
+                </p>
+              {/if}
               {#if c.summary_ko}
-                <p class="result-row"><span class="rk">요약(가톨릭 용어)</span> {c.summary_ko}</p>
+                <p class="result-row"><span class="rk">요약(표준 용어)</span> {c.summary_ko}</p>
               {/if}
 
-              <p class="result-row">
+              <div class="result-row evidence-section">
                 <span class="rk">근거</span>
-                {#each c.evidence as ev (ev.chunk_id + ev.quote.slice(0, 8))}
-                  <span class="ev">{ev.chunk_id}</span>
-                {/each}
+                {#if c.evidence.length}
+                  <div class="evidence-list">
+                    {#each c.evidence as ev (ev.chunk_id + ev.quote.slice(0, 8))}
+                      <article class="evidence-card">
+                        <div class="evidence-head">
+                          <span class="ev">{ev.chunk_id}</span>
+                          <span class="ev-loc">{evidenceLocation(chunkLookup.get(ev.chunk_id) ?? null, ev.quote)}</span>
+                        </div>
+                        <blockquote class="evidence-quote">{ev.quote}</blockquote>
+                        {#if ev.translation_ko}
+                          <p class="evidence-translation">
+                            <span class="rk">번역</span>
+                            {ev.translation_ko}
+                          </p>
+                        {/if}
+                      </article>
+                    {/each}
+                  </div>
+                {/if}
                 {#each c.rejectedEvidence as rev, ri (rev.claimed_chunk_id + ri)}
                   <span class="ev bad">{rev.claimed_chunk_id || '(빈 chunk_id)'}</span>
                 {/each}
                 {#if c.evidence.length === 0 && c.rejectedEvidence.length === 0}
                   <span class="ev empty">(근거 없음)</span>
                 {/if}
-              </p>
+              </div>
 
               {#if c.violations.length}
                 <ul class="violations">
@@ -451,6 +503,48 @@
   .conf { font-size: 0.6875rem; color: var(--text-secondary); }
 
   .result-row { margin: 0; font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.5; }
+  .evidence-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+  .evidence-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+  .evidence-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-tight);
+    background: var(--surface-elevated);
+    padding: var(--space-sm);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+  .evidence-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-xs);
+  }
+  .ev-loc {
+    font-size: 0.6875rem;
+    color: var(--text-secondary);
+  }
+  .evidence-quote {
+    margin: 0;
+    padding-left: var(--space-sm);
+    border-left: 2px solid var(--border-subtle);
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .evidence-translation {
+    margin: 0;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+  }
   .rk {
     font-family: var(--heading-family);
     font-size: 0.6875rem;

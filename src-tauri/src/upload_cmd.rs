@@ -9,9 +9,8 @@
 //!   2. Verify magic bytes against the declared extension (Rust-side parity
 //!      with `src/lib/upload/magicBytes.ts`).
 //!   3. Compute SHA-256 hex prefix (16 chars) → `source_id`.
-//!   4. Resolve the project root (current working dir of the Tauri host
-//!      process; the `data/sources/` dir is created on first use).
-//!   5. Refuse to write outside `<target_root>/data/sources/<source_id>/`.
+//!   4. Resolve the exe-local writable data root.
+//!   5. Refuse to write outside `<data_root>/sources/<source_id>/`.
 //!   6. Copy the file into the resolved directory using the original file
 //!      name (sanitized to a safe leaf).
 //!
@@ -24,6 +23,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::portable_data_root;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -46,7 +46,10 @@ pub struct UploadError {
 
 impl UploadError {
     fn of(kind: &str, reason: impl Into<String>) -> Self {
-        Self { kind: kind.into(), reason: reason.into() }
+        Self {
+            kind: kind.into(),
+            reason: reason.into(),
+        }
     }
 }
 
@@ -108,7 +111,11 @@ fn verify_magic_bytes(name: &str, head: &[u8]) -> Result<DeclaredType, UploadErr
             "magic_bytes_mismatch",
             format!(
                 "declared .{} but signature is %PDF-",
-                if declared == DeclaredType::Markdown { "md" } else { "txt" }
+                if declared == DeclaredType::Markdown {
+                    "md"
+                } else {
+                    "txt"
+                }
             ),
         ));
     }
@@ -119,10 +126,16 @@ fn verify_magic_bytes(name: &str, head: &[u8]) -> Result<DeclaredType, UploadErr
         ));
     }
     if starts_with(head, ELF_MAGIC) {
-        return Err(UploadError::of("magic_bytes_mismatch", "ELF executable signature detected"));
+        return Err(UploadError::of(
+            "magic_bytes_mismatch",
+            "ELF executable signature detected",
+        ));
     }
     if starts_with(head, ZIP_MAGIC) {
-        return Err(UploadError::of("magic_bytes_mismatch", "ZIP container signature detected"));
+        return Err(UploadError::of(
+            "magic_bytes_mismatch",
+            "ZIP container signature detected",
+        ));
     }
     if !is_utf8(head) {
         return Err(UploadError::of(
@@ -143,18 +156,14 @@ fn sanitize_leaf(name: &str) -> String {
         .unwrap_or_else(|| name.to_string());
     // Defensive: replace control chars / colons (Windows).
     leaf.chars()
-        .map(|c| if c.is_control() || c == ':' || c == '\\' || c == '/' { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || c == ':' || c == '\\' || c == '/' {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect()
-}
-
-fn resolve_root() -> Result<PathBuf, UploadError> {
-    // The Tauri host runs from the target project root in dev; in production
-    // builds we rely on `current_dir` having been set by the launcher.
-    // We do NOT call `app_data_dir` / `home_dir` / `APPDATA` here: AC-7-relaxed
-    // bounds OS-user-directory accessors to `external_dep_paths.rs`.
-    let root = std::env::current_dir()
-        .map_err(|e| UploadError::of("io", format!("current_dir failed: {e}")))?;
-    Ok(root)
 }
 
 fn assert_under_root(root: &Path, target: &Path) -> Result<(), UploadError> {
@@ -175,7 +184,11 @@ fn assert_under_root(root: &Path, target: &Path) -> Result<(), UploadError> {
     if !t.starts_with(&r) {
         return Err(UploadError::of(
             "out_of_root",
-            format!("destination {} escapes target root {}", t.display(), r.display()),
+            format!(
+                "destination {} escapes target root {}",
+                t.display(),
+                r.display()
+            ),
         ));
     }
     Ok(())
@@ -197,7 +210,7 @@ fn sha256_prefix(bytes: &[u8]) -> String {
 /* ---------------- Tauri command ---------------- */
 
 /// Shared ingest body: verify magic bytes, hash → source_id, write the bytes
-/// into `<root>/data/sources/<source_id>/<sanitized-name>` (path-safe). Both the
+/// into `<data_root>/sources/<source_id>/<sanitized-name>` (path-safe). Both the
 /// disk-path command (`upload_file`) and the in-memory-bytes command
 /// (`upload_bytes`) funnel through here so the magic-bytes / hashing /
 /// out-of-root guards are identical regardless of how the bytes arrived.
@@ -206,7 +219,7 @@ fn sha256_prefix(bytes: &[u8]) -> String {
 /// object exposes NO `.path` (the non-standard Electron field does not exist),
 /// so the renderer reads the bytes it already has (for the magic-byte check) and
 /// hands them to the host directly — no OS path needed for picker OR drag-drop.
-fn ingest_bytes(original_name: &str, buf: &[u8]) -> Result<UploadResult, UploadError> {
+fn ingest_bytes(root: &Path, original_name: &str, buf: &[u8]) -> Result<UploadResult, UploadError> {
     // Magic-bytes check on the first READ_HEAD_LEN bytes.
     let head_len = std::cmp::min(buf.len(), READ_HEAD_LEN);
     let declared = verify_magic_bytes(original_name, &buf[..head_len])?;
@@ -214,30 +227,36 @@ fn ingest_bytes(original_name: &str, buf: &[u8]) -> Result<UploadResult, UploadE
 
     let source_id = sha256_prefix(buf);
 
-    let root = resolve_root()?;
-    let dest_dir = root.join("data").join("sources").join(&source_id);
+    let dest_dir = root.join("sources").join(&source_id);
     let leaf = sanitize_leaf(original_name);
     let dest = dest_dir.join(&leaf);
 
     fs::create_dir_all(&dest_dir)
         .map_err(|e| UploadError::of("io", format!("mkdir failed: {e}")))?;
 
-    assert_under_root(&root, &dest)?;
+    assert_under_root(root, &dest)?;
 
-    fs::write(&dest, buf)
-        .map_err(|e| UploadError::of("io", format!("write failed: {e}")))?;
+    fs::write(&dest, buf).map_err(|e| UploadError::of("io", format!("write failed: {e}")))?;
 
     let written = dest.to_string_lossy().to_string();
     let byte_count = buf.len() as u64;
 
-    Ok(UploadResult { source_id, written_path: written, byte_count, detected_type: detected })
+    Ok(UploadResult {
+        source_id,
+        written_path: written,
+        byte_count,
+        detected_type: detected,
+    })
 }
 
 #[tauri::command]
 pub fn upload_file(path: String) -> Result<UploadResult, UploadError> {
     let src_path = PathBuf::from(&path);
     if !src_path.is_file() {
-        return Err(UploadError::of("not_found", format!("not a regular file: {}", path)));
+        return Err(UploadError::of(
+            "not_found",
+            format!("not a regular file: {}", path),
+        ));
     }
 
     // Read file fully (Slice 2 files are user-uploaded plaintext/MD/PDF — small).
@@ -252,7 +271,8 @@ pub fn upload_file(path: String) -> Result<UploadResult, UploadError> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "upload.bin".into());
 
-    ingest_bytes(&original_name, &buf)
+    let root = portable_data_root::data_root().map_err(|e| UploadError::of("io", e))?;
+    ingest_bytes(&root, &original_name, &buf)
 }
 
 /// In-memory upload: the renderer passes the file's bytes (a WebView2 `File` has
@@ -261,7 +281,8 @@ pub fn upload_file(path: String) -> Result<UploadResult, UploadError> {
 /// for both the file picker and drag-drop.
 #[tauri::command]
 pub fn upload_bytes(filename: String, bytes: Vec<u8>) -> Result<UploadResult, UploadError> {
-    ingest_bytes(&filename, &bytes)
+    let root = portable_data_root::data_root().map_err(|e| UploadError::of("io", e))?;
+    ingest_bytes(&root, &filename, &bytes)
 }
 
 #[cfg(test)]

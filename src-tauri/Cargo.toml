@@ -46,3 +46,13 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "gzi
 # select! macro) — Cargo feature unification reuses the locked version, so this
 # adds no new crate to the lockfile.
 tokio = { version = "1", default-features = false, features = ["process", "io-util", "time", "macros", "rt"] }
+# Windows-native proxy cleanup: when this app spawns `cmd /C npx openai-oauth`,
+# keep the process tree in a Job Object so closing the app also closes the
+# child/descendant node processes. Existing/reused localhost proxies are not
+# assigned to this job and are therefore not killed by app shutdown.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }

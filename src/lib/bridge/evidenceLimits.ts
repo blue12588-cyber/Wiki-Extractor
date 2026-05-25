@@ -1,0 +1,1 @@
+export const MAX_EVIDENCE_QUOTE_CHARS = 600;

@@ -29,7 +29,7 @@
 
 import { buildPrompt, type PromptInput } from '$lib/bridge/promptBuilder';
 import { parseResponse } from '$lib/bridge/responseParser';
-import { validateResponse, type ValidationResult } from '$lib/bridge/responseValidator';
+import { validateResponse, type EvidenceAnchor, type ValidationResult } from '$lib/bridge/responseValidator';
 import type { ExtractionProvider } from './provider';
 
 /** Outcome of an auto-extract attempt. */
@@ -49,7 +49,7 @@ export type AutoExtractOutcome =
 export async function autoExtractCandidate(
   provider: ExtractionProvider,
   input: PromptInput,
-  knownChunkIds: string[],
+  knownChunkIds: Iterable<string | EvidenceAnchor>,
 ): Promise<AutoExtractOutcome> {
   // 1. Build the SAME prompt the manual path copies to chatgpt.com.
   const prompt = buildPrompt(input);

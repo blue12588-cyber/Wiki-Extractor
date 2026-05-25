@@ -82,6 +82,19 @@
         ? 'codex 설치됨 · 로그인 필요'
         : 'codex CLI 미설치',
   );
+
+  function displayDetectDetail(detail: string): string {
+    return detail
+      .split(' · ')
+      .map((part) => {
+        if (part.startsWith('home=')) return 'home=(숨김)';
+        if (part.startsWith('auth_file:')) return 'auth_file:(확인됨)';
+        return part
+          .replace(/[A-Za-z]:\\[^·]+/g, '(경로 숨김)')
+          .replace(/\/(?:Users|home)\/[^·]+/g, '/(경로 숨김)');
+      })
+      .join(' · ');
+  }
 </script>
 
 <section class="mode-block" aria-label="추출 모드 선택">
@@ -101,7 +114,7 @@
        표시하며 auth.json 내용이나 토큰은 절대 담기지 않는다. 검출이 다시 깜깜이로
        실패하는 일을 막기 위한 진단 보조 줄. -->
   {#if modeStore.detect.detail}
-    <p class="detect-detail" role="note">검출 상세: <code>{modeStore.detect.detail}</code></p>
+    <p class="detect-detail" role="note">검출 상세: <code>{displayDetectDetail(modeStore.detect.detail)}</code></p>
   {/if}
 
   <!-- 검출 에러 표면화(Slice 10 · AC-REFRESH-SURFACE): invoke 호출 자체가 실패하면
@@ -135,7 +148,7 @@
         <li>로그인이 필요하면 ChatGPT 공식 로그인 페이지와 확인 코드를 보여 줍니다.</li>
         <li>앱은 아이디·비밀번호를 받지 않고, 인증 파일을 만들거나 고치지 않습니다.</li>
       </ul>
-      <p>Codex CLI가 아직 없다면 아래 안내대로 먼저 설치해야 합니다. 자동 모드가 막혀도 복붙 모드는 그대로 사용할 수 있습니다.</p>
+      <p>Codex CLI가 아직 없다면 아래 안내대로 먼저 설치해야 합니다. 자동 모드가 막혀도 후보별 복붙 모드는 그대로 사용할 수 있습니다.</p>
     </div>
 
     <!-- 보조 경로: 코드 입력 방식이 막힌 드문 환경을 위한 브라우저 콜백(legacy) 흐름.
@@ -245,10 +258,14 @@
         아래 순서로 한 번만 직접 설정한 뒤 [다시 검출]을 누르세요.
       </p>
       <ol>
+        <li>
+          <a href="https://nodejs.org/ko" target="_blank" rel="noreferrer noopener">Node.js LTS</a>
+          설치 후 <code>node -v</code>, <code>npm -v</code> 확인
+        </li>
         <li><code>npm i -g @openai/codex</code></li>
         <li><code>codex login</code></li>
       </ol>
-      <p>설치하지 않아도 기본 <strong>복붙 모드</strong>로 모든 기능을 그대로 사용할 수 있습니다.</p>
+      <p>설치하지 않아도 기본 <strong>후보별 복붙 모드</strong>로 정리·검증은 계속할 수 있습니다.</p>
     </div>
   {/if}
 </section>

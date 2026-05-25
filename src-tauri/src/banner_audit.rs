@@ -111,7 +111,9 @@ fn collect_banner_text(root: &Path) -> (Option<String>, Vec<PathBuf>) {
 }
 
 fn load_phrase_matchers(root: &Path) -> Option<PhraseMatchers> {
-    let p = root.join("fixtures").join("disclosure-phrase-matchers.json");
+    let p = root
+        .join("fixtures")
+        .join("disclosure-phrase-matchers.json");
     let txt = read_text(&p)?;
     serde_json::from_str(&txt).ok()
 }
@@ -129,9 +131,8 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
 
 #[tauri::command]
 pub fn __t1_banner_audit() -> BannerAuditReport {
-    let root = find_repo_root().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let root = find_repo_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let (text_opt, files) = collect_banner_text(&root);
     let text = text_opt.unwrap_or_default();
     let banner_mounted = banner_marker_present(&text);

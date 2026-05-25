@@ -10,7 +10,7 @@
     왜 후보인가 : <근거 요약>
     근거      : <chunk_id + page>
     주의      : <경계 — 이 자료로 말하면 안 되는 것>
-    [승인] [보류] [폐기] [ChatGPT 프롬프트 복사]   ← last is a 5b placeholder
+    [승인] [보류] [폐기] [ChatGPT 브릿지 열기]   ← last opens the 5b bridge
 
   Reflects the harness-core wiki structure (Claim / Evidence / Synthesis /
   Boundaries / Links): 왜=Claim+Synthesis, 근거=Evidence, 주의=Boundaries.
@@ -31,7 +31,7 @@
     scored: ScoredCandidate;
     decision: CandidateDecision;
     ondecision?: (next: CandidateDecision) => void;
-    /** 5b placeholder hook; in 5a this is a disabled stub. */
+    /** Opens the 5b ChatGPT copy-paste bridge. */
     oncopyprompt?: () => void;
   };
 
@@ -50,6 +50,7 @@
   let why = $derived(scored.rationale.why);
   let boundary = $derived(scored.rationale.boundary);
   let demotion = $derived(scored.rationale.demotion);
+  let originalTerms = $derived(cand.original_terms ?? []);
 
   // Evidence locator string: chunk/page refs (verbatim from the candidate).
   let locator = $derived.by(() => {
@@ -102,6 +103,17 @@
           <li>{w}</li>
         {/each}
       </ul>
+    </div>
+  {/if}
+
+  {#if originalTerms.length}
+    <div class="row">
+      <span class="row-key">핵심 용어</span>
+      <p class="terms">
+        {#each originalTerms as term (term)}
+          <span class="term">{term}</span>
+        {/each}
+      </p>
     </div>
   {/if}
 
@@ -161,9 +173,9 @@
     <button
       type="button"
       class="btn copy"
-      title="이 후보로 ChatGPT 프롬프트를 만들어 복사·왕복합니다(앱은 ChatGPT를 직접 호출하지 않습니다)"
+      title="이 후보의 ChatGPT 복붙 브릿지를 엽니다(프롬프트 복사와 응답 검증은 브릿지 안에서 합니다)"
       onclick={() => oncopyprompt?.()}
-    >ChatGPT 프롬프트 복사</button>
+    >ChatGPT 브릿지 열기</button>
   </div>
 </li>
 
@@ -286,6 +298,23 @@
     border: 1px solid var(--border-subtle);
   }
   .loc.muted { opacity: 0.7; }
+
+  .terms {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+  }
+
+  .term {
+    font-size: 0.75rem;
+    padding: 1px var(--space-sm);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+  }
 
   .row.caution .row-key { color: var(--danger-rust); }
   .row.caution {

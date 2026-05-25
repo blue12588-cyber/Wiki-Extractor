@@ -60,6 +60,36 @@ export function runCandidateEngine(input: EngineInput): CandidateCardModel[] {
   return scored.map((s) => ({ scored: s, decision: 'pending' as CandidateDecision }));
 }
 
+function decisionKey(card: CandidateCardModel): string {
+  const c = card.scored.candidate;
+  return `${c.source_id}\u0000${c.local_candidate_id}`;
+}
+
+/**
+ * Re-apply existing review decisions after the deterministic engine refreshes.
+ * The score/action may change, but a user's 승인/보류/폐기 choice belongs to
+ * the same source-local candidate id and must not be lost during wiki build.
+ */
+export function carryCandidateDecisions(
+  fresh: CandidateCardModel[],
+  previous: CandidateCardModel[],
+): CandidateCardModel[] {
+  const decisions = new Map(previous.map((card) => [decisionKey(card), card.decision]));
+  return fresh.map((card) => {
+    const decision = decisions.get(decisionKey(card));
+    return decision ? { ...card, decision } : card;
+  });
+}
+
+export function shouldSaveOfflineCard(card: CandidateCardModel): boolean {
+  if (card.scored.recommended_action === 'ignore') return false;
+  return card.decision !== 'held' && card.decision !== 'discarded';
+}
+
+export function selectOfflineWikiCardsForSave(cards: CandidateCardModel[]): CandidateCardModel[] {
+  return cards.filter(shouldSaveOfflineCard);
+}
+
 /** Korean label for a recommended action (UI). */
 export const ACTION_LABEL: Record<ScoredCandidate['recommended_action'], string> = {
   create_new: '생성',

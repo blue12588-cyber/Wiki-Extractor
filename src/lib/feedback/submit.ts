@@ -21,6 +21,10 @@
  * submit feedback (AC-FEEDBACK-FORM).
  */
 
+import type { ExtractionDiagnosticReport } from '$lib/diagnostics/extractionReport';
+
+export const DIAGNOSTIC_REPORT_MAX_JSON_CHARS = 900_000;
+
 export interface FeedbackInput {
   /** Optional subject line. */
   title: string;
@@ -28,6 +32,8 @@ export interface FeedbackInput {
   message: string;
   /** Optional reply-to address. When present it is sent as `email`. */
   email: string;
+  /** Optional extraction diagnostic report, already redacted by the caller. */
+  diagnosticReport?: ExtractionDiagnosticReport | null;
 }
 
 export interface FeedbackPayload {
@@ -37,6 +43,8 @@ export interface FeedbackPayload {
   email?: string;
   /** Quiet Formspree's own e-mail notification subject when a title is set. */
   _subject?: string;
+  /** Opt-in extraction report for algorithm debugging. */
+  diagnostic_report?: ExtractionDiagnosticReport | Record<string, unknown>;
 }
 
 export type FeedbackValidation =
@@ -56,10 +64,72 @@ export function validateFeedback(raw: FeedbackInput): FeedbackValidation {
   return {
     ok: true,
     value: {
-      title: raw.title.trim(),
-      message,
-      email: raw.email.trim(),
+        title: raw.title.trim(),
+        message,
+        email: raw.email.trim(),
+        diagnosticReport: raw.diagnosticReport ?? null,
+      },
+  };
+}
+
+function fitDiagnosticReportForPayload(report: ExtractionDiagnosticReport): ExtractionDiagnosticReport | Record<string, unknown> {
+  const json = JSON.stringify(report);
+  if (json.length <= DIAGNOSTIC_REPORT_MAX_JSON_CHARS) return report;
+
+  return {
+    schema: report.schema,
+    created_at: report.created_at,
+    consent: report.consent,
+    privacy_guards: report.privacy_guards,
+    app_context: report.app_context,
+    source: report.source,
+    text_quality: report.text_quality,
+    outline: {
+      node_count: report.outline.node_count,
+      root_count: report.outline.root_count,
+      nodes: report.outline.nodes.slice(0, 80),
+      truncated_nodes: Math.max(report.outline.nodes.length - 80, 0),
     },
+    counts: report.counts,
+    auto_wiki_progress: report.auto_wiki_progress,
+    offline_candidates: report.offline_candidates.slice(0, 120),
+    llm_failure_summary: report.llm_failure_summary.slice(0, 120),
+    llm_batches: report.llm_batches.slice(-20).map((batch) => ({
+      source_id: batch.source_id,
+      provider_ok: batch.provider_ok,
+      provider_error: batch.provider_error,
+      parse_ok: batch.parse_ok,
+      parse_error: batch.parse_error,
+      parse_recovered: batch.parse_recovered,
+      parse_recovered_count: batch.parse_recovered_count,
+      validation_shape_ok: batch.validation_shape_ok,
+      validation_top_level_error: batch.validation_top_level_error,
+      candidates: batch.candidates,
+      advanced_debug: batch.advanced_debug
+        ? {
+            batch_index: batch.advanced_debug.batch_index,
+            total_batches: batch.advanced_debug.total_batches,
+            chunk_orders: batch.advanced_debug.chunk_orders,
+            chunk_ids: batch.advanced_debug.chunk_ids,
+            prompt_version: batch.advanced_debug.prompt_version,
+            prompt_char_count: batch.advanced_debug.prompt_char_count,
+            raw_response_excerpt:
+              typeof batch.advanced_debug.raw_response === 'string'
+                ? batch.advanced_debug.raw_response.slice(0, 12_000)
+                : null,
+            raw_response_truncated:
+              typeof batch.advanced_debug.raw_response === 'string' &&
+              batch.advanced_debug.raw_response.length > 12_000,
+            source_chunk_samples: batch.advanced_debug.source_chunk_samples,
+          }
+        : null,
+    })),
+    persisted_entries_summary: report.persisted_entries_summary.slice(0, 120),
+    redaction_note: report.redaction_note,
+    truncated: true,
+    truncation_reason:
+      `진단 리포트가 ${DIAGNOSTIC_REPORT_MAX_JSON_CHARS}자 제한을 넘어 요약본으로 전송되었습니다.`,
+    original_json_chars: json.length,
   };
 }
 
@@ -73,6 +143,9 @@ export function buildPayload(input: FeedbackInput): FeedbackPayload {
     payload._subject = `[llmwiki 피드백] ${title}`;
   }
   if (email.length > 0) payload.email = email;
+  if (input.diagnosticReport) {
+    payload.diagnostic_report = fitDiagnosticReportForPayload(input.diagnosticReport);
+  }
   return payload;
 }
 

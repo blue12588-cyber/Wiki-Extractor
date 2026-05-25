@@ -89,9 +89,9 @@
 //!     detection failure is diagnosable instead of silent.
 
 use std::io::Read;
-use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -99,7 +99,7 @@ use serde::Serialize;
 use crate::external_dep_paths::{auth_file_display, auth_file_present, resolved_home_display};
 
 /// Result of the `codex login status` probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoginProbe {
     /// `codex login status` exited 0 — authenticated (file OR OS keyring).
@@ -120,7 +120,7 @@ pub enum LoginProbe {
 ///     WSL Ubuntu install. Only reachable on Windows.
 ///   - `None` — neither probe found codex (the common-person, copy-paste case),
 ///     OR a non-Windows host where codex is simply absent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexOrigin {
     Windows,
@@ -308,10 +308,7 @@ fn last_drive_rooted_line(stdout: &str) -> Option<String> {
 /// True iff `s` begins with a Windows drive letter root like `C:\` or `D:/`.
 fn is_drive_rooted(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() >= 3
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b[2] == b'\\' || b[2] == b'/')
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
 /// AC-NPM-PREFIX-PROBE: resolve the npm global prefix and probe the absolute
@@ -436,17 +433,29 @@ pub fn detect_codex() -> CodexDetect {
                 // try the npm-prefix absolute probe (AC-NPM-PREFIX-PROBE), which
                 // finds a custom-prefix codex regardless of PATH.
                 match probe_login_status_npm_prefix() {
-                    Some(LoginProbe::Authed) => {
-                        (LoginProbe::Authed, CodexOrigin::Windows, DetectSignal::ProbeNpmPrefix)
-                    }
-                    Some(LoginProbe::Unauthed) => {
-                        (LoginProbe::Unauthed, CodexOrigin::Windows, DetectSignal::ProbeNpmPrefix)
-                    }
+                    Some(LoginProbe::Authed) => (
+                        LoginProbe::Authed,
+                        CodexOrigin::Windows,
+                        DetectSignal::ProbeNpmPrefix,
+                    ),
+                    Some(LoginProbe::Unauthed) => (
+                        LoginProbe::Unauthed,
+                        CodexOrigin::Windows,
+                        DetectSignal::ProbeNpmPrefix,
+                    ),
                     // npm prefix didn't resolve codex → cross-boundary WSL.
                     _ => match probe_login_status_wsl() {
-                        LoginProbe::Authed => (LoginProbe::Authed, CodexOrigin::Wsl, DetectSignal::ProbeWsl),
-                        LoginProbe::Unauthed => (LoginProbe::Unauthed, CodexOrigin::Wsl, DetectSignal::ProbeWsl),
-                        LoginProbe::Missing => (LoginProbe::Missing, CodexOrigin::None, DetectSignal::None),
+                        LoginProbe::Authed => {
+                            (LoginProbe::Authed, CodexOrigin::Wsl, DetectSignal::ProbeWsl)
+                        }
+                        LoginProbe::Unauthed => (
+                            LoginProbe::Unauthed,
+                            CodexOrigin::Wsl,
+                            DetectSignal::ProbeWsl,
+                        ),
+                        LoginProbe::Missing => {
+                            (LoginProbe::Missing, CodexOrigin::None, DetectSignal::None)
+                        }
                     },
                 }
             } else {
@@ -568,11 +577,22 @@ mod tests {
         // NOT None.
         let d = detect_codex();
         if d.login_probe == LoginProbe::Missing {
-            assert_eq!(d.origin, CodexOrigin::None, "Missing probe must have origin none");
+            assert_eq!(
+                d.origin,
+                CodexOrigin::None,
+                "Missing probe must have origin none"
+            );
             assert!(d.codex_cli_missing, "Missing probe must mark cli_missing");
         } else {
-            assert_ne!(d.origin, CodexOrigin::None, "a present codex must record a non-none origin");
-            assert!(!d.codex_cli_missing, "a present codex must not be cli_missing");
+            assert_ne!(
+                d.origin,
+                CodexOrigin::None,
+                "a present codex must record a non-none origin"
+            );
+            assert!(
+                !d.codex_cli_missing,
+                "a present codex must not be cli_missing"
+            );
         }
     }
 
@@ -587,7 +607,8 @@ mod tests {
         let src = include_str!("codex_detect.rs");
         // The Windows arm of build_probe_command builds `cmd /C codex login status`.
         assert!(
-            src.contains("Command::new(\"cmd\")") && src.contains("\"/C\", bin, \"login\", \"status\""),
+            src.contains("Command::new(\"cmd\")")
+                && src.contains("\"/C\", bin, \"login\", \"status\""),
             "Windows probe must route through `cmd /C <bin> login status` (the .cmd-shim fix)"
         );
         // The non-Windows arm keeps the direct spawn.
@@ -597,7 +618,8 @@ mod tests {
         );
         // The WSL fallback uses wsl.exe with fixed-literal args.
         assert!(
-            src.contains("Command::new(\"wsl.exe\")") && src.contains("\"--\", \"codex\", \"login\", \"status\""),
+            src.contains("Command::new(\"wsl.exe\")")
+                && src.contains("\"--\", \"codex\", \"login\", \"status\""),
             "WSL fallback must be `wsl.exe -- codex login status` with fixed literal args"
         );
     }
@@ -611,7 +633,8 @@ mod tests {
         let src = include_str!("codex_detect.rs");
         // `bin` is sourced ONLY from the fixed candidate list.
         assert!(
-            src.contains("&[\"codex.cmd\", \"codex.exe\", \"codex\"]") && src.contains("&[\"codex\"]"),
+            src.contains("&[\"codex.cmd\", \"codex.exe\", \"codex\"]")
+                && src.contains("&[\"codex\"]"),
             "binary names must come from the fixed candidate list"
         );
         // No formatted/concatenated argument is passed to a probe command.
@@ -629,9 +652,15 @@ mod tests {
     #[test]
     fn origin_serializes_snake_case() {
         // The renderer reads `origin` as snake_case strings.
-        assert_eq!(serde_json::to_string(&CodexOrigin::Windows).unwrap(), "\"windows\"");
+        assert_eq!(
+            serde_json::to_string(&CodexOrigin::Windows).unwrap(),
+            "\"windows\""
+        );
         assert_eq!(serde_json::to_string(&CodexOrigin::Wsl).unwrap(), "\"wsl\"");
-        assert_eq!(serde_json::to_string(&CodexOrigin::None).unwrap(), "\"none\"");
+        assert_eq!(
+            serde_json::to_string(&CodexOrigin::None).unwrap(),
+            "\"none\""
+        );
     }
 
     #[test]
@@ -645,8 +674,14 @@ mod tests {
             detail: build_detail(false, true, DetectSignal::ProbeWsl),
         };
         let json = serde_json::to_string(&d).unwrap();
-        assert!(json.contains("\"origin\":\"wsl\""), "origin must serialize snake_case in the snapshot");
-        assert!(json.contains("\"detail\":"), "detail must serialize in the snapshot");
+        assert!(
+            json.contains("\"origin\":\"wsl\""),
+            "origin must serialize snake_case in the snapshot"
+        );
+        assert!(
+            json.contains("\"detail\":"),
+            "detail must serialize in the snapshot"
+        );
     }
 
     // AC-DETECT-SELFDIAG: the detail field carries ONLY paths + signal labels and
@@ -660,7 +695,10 @@ mod tests {
         let auth_hit = build_detail(true, true, DetectSignal::ProbePath);
         assert!(auth_hit.starts_with("home="), "detail must lead with home=");
         // available + file_present ⇒ the auth_file: label (path only).
-        assert!(auth_hit.contains("auth_file"), "file-present detail must label auth_file");
+        assert!(
+            auth_hit.contains("auth_file"),
+            "file-present detail must label auth_file"
+        );
 
         let path_hit = build_detail(false, true, DetectSignal::ProbePath);
         assert!(path_hit.contains("probe_path"));
@@ -669,7 +707,10 @@ mod tests {
         let wsl_hit = build_detail(false, true, DetectSignal::ProbeWsl);
         assert!(wsl_hit.contains("probe_wsl"));
         let none_hit = build_detail(false, false, DetectSignal::None);
-        assert!(none_hit.contains("none:"), "unavailable detail must carry a none: reason");
+        assert!(
+            none_hit.contains("none:"),
+            "unavailable detail must carry a none: reason"
+        );
 
         // No forbidden OS-user-dir token identifier appears in ANY detail string.
         // (The home path VALUE like `C:\Users\...` is fine; the banned thing is
@@ -686,7 +727,10 @@ mod tests {
         // And never the literal `auth.json` CONTENTS marker — detail shows a path,
         // not file contents. (We can't read contents anyway; this pins intent.)
         for d in [&auth_hit, &path_hit, &npm_hit, &wsl_hit, &none_hit] {
-            assert!(!d.contains("access_token") && !d.contains("Bearer"), "detail leaked a secret marker: {d}");
+            assert!(
+                !d.contains("access_token") && !d.contains("Bearer"),
+                "detail leaked a secret marker: {d}"
+            );
         }
     }
 
@@ -698,7 +742,8 @@ mod tests {
         let src = include_str!("codex_detect.rs");
         // The prefix query is `cmd /C npm prefix -g` with fixed literals.
         assert!(
-            src.contains("Command::new(\"cmd\")") && src.contains("\"/C\", \"npm\", \"prefix\", \"-g\""),
+            src.contains("Command::new(\"cmd\")")
+                && src.contains("\"/C\", \"npm\", \"prefix\", \"-g\""),
             "npm prefix query must be `cmd /C npm prefix -g` with fixed literals"
         );
         // The absolute codex probe is `cmd /C <prefix>\\codex.cmd login status`;

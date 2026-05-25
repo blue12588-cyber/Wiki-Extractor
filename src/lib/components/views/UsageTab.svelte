@@ -69,7 +69,7 @@
         <section class="mode-guide-card">
           <h4>처음 쓰는 분</h4>
           <strong>복붙 모드</strong>
-          <p>설치 없이 시작합니다. 앱이 프롬프트를 만들어 주면 ChatGPT 사이트에 직접 붙여넣고, 답을 다시 앱에 붙여넣습니다.</p>
+          <p>설치 없이 시작합니다. 먼저 오프라인 후보를 만든 뒤, 필요한 후보 카드에서 ChatGPT 브릿지를 열어 답을 붙여넣고 검증합니다.</p>
         </section>
         <section class="mode-guide-card">
           <h4>자동으로 돌리고 싶은 분</h4>
@@ -92,19 +92,21 @@
             <!-- ③ 단계: 복붙 방식(기본) / 자동 방식(로그인 시) 두 갈래 -->
             <p class="step-body">
               뽑은 후보를 더 깔끔하게 다듬으려면 ChatGPT의 도움을 받습니다.
-              방법은 두 가지이고, <strong>어느 쪽이든 결과는 같습니다.</strong>
+              방법은 두 가지이고, <strong>근거 검증 기준은 같습니다.</strong>
             </p>
 
             <div class="branch" data-kind="paste">
-              <h4 class="branch-title">방법 A · 복사해서 붙여넣기 <span class="branch-tag">기본 · 누구나</span></h4>
+              <h4 class="branch-title">방법 A · 후보별 복사해서 붙여넣기 <span class="branch-tag">기본 · 누구나</span></h4>
               <ol class="branch-steps" role="list">
-                <li>[ChatGPT 프롬프트 복사] 버튼을 누르면 보낼 내용이 통째로 복사됩니다.</li>
-                <li>웹브라우저에서 <code>chatgpt.com</code>에 들어가 빈칸에 그대로 붙여넣고 보냅니다.</li>
-                <li>ChatGPT가 답한 내용을 다시 복사해서, 앱의 입력칸에 붙여넣습니다.</li>
+                <li>먼저 [규칙 기반 후보 추출(오프라인)]을 눌러 후보 카드를 봅니다.</li>
+                <li>정리하고 싶은 후보 카드에서 [ChatGPT 브릿지 열기]를 누릅니다.</li>
+                <li>브릿지 안의 [프롬프트 복사]를 누르고, 웹브라우저에서 <code>chatgpt.com</code>에 붙여넣어 보냅니다.</li>
+                <li>ChatGPT가 돌려준 JSON을 브릿지 입력칸에 붙여넣고 [검증]을 누릅니다.</li>
+                <li>검증을 통과한 후보만 [가져오기]로 위키 초안에 넣습니다.</li>
               </ol>
               <p class="branch-note">
-                가입·로그인 외에 따로 설치할 것이 없어, 누구나 바로 쓸 수 있는
-                기본 방법입니다.
+                이 방법은 책 전체를 한 번에 보내는 방식이 아니라, 앱이 먼저 고른
+                후보를 하나씩 확인하며 정리하는 기본 방법입니다.
               </p>
             </div>
 
@@ -112,7 +114,7 @@
               <h4 class="branch-title">방법 B · 자동으로 처리 <span class="branch-tag">선택 · 로그인하면</span></h4>
               <p class="branch-note">
                 <strong>Codex CLI를 설치한 뒤</strong> [로그인] 화면에서
-                <strong>[ChatGPT로 로그인]</strong> 버튼을 누르면, 위 복사·붙여넣기
+                <strong>[ChatGPT로 로그인]</strong> 버튼을 누르면, 후보 추출과 LLM 정리
                 과정을 앱이 자동으로 처리할 수 있습니다. 버튼을 누르면 앱이 먼저
                 로그인 상태를 확인하고, <strong>이미 로그인돼 있으면</strong> 브라우저를
                 열지 않고 바로 자동 모드를 켭니다(정상이에요). 아직 로그인 전이면
@@ -132,7 +134,7 @@
               </p>
               <p class="branch-note muted">
                 이 방법은 선택 사항이에요. 로그인하지 않아도 <strong>방법 A</strong>로
-                모든 기능을 똑같이 쓸 수 있습니다.
+                같은 검증 흐름을 수동으로 쓸 수 있습니다.
               </p>
             </div>
           {/if}
@@ -150,8 +152,8 @@
       자동 모드 설정법 <span class="auto-setup-tag">고급 · 선택</span>
     </h3>
     <p class="auto-setup-lede">
-      위 <strong>방법 A(복사·붙여넣기)</strong>만으로도 모든 기능을 그대로 쓸 수
-      있습니다. 매번 복사·붙여넣기 하기가 번거롭다면, 아래 설정을
+      위 <strong>방법 A(후보별 복사·붙여넣기)</strong>만으로도 후보 정리와 검증을
+      할 수 있습니다. 후보마다 복사·붙여넣기 하기가 번거롭다면, 아래 설정을
       <strong>한 번만</strong> 해 두면 앱이 알아서 ChatGPT에게 물어보고 결과를
       받아오는 <strong>자동 모드</strong>를 켤 수 있어요. 단, Codex 설치와 로그인은
       사용자가 직접 합니다. 자동 모드는 내 ChatGPT 계정(무료 또는 구독)으로 동작하며,
@@ -161,7 +163,7 @@
     <div class="auto-boundary" role="note" aria-label="자동 모드에서 앱과 사용자가 하는 일">
       <div>
         <span class="boundary-kicker">사용자가 하는 일</span>
-        <strong>Codex 설치 · ChatGPT 로그인</strong>
+        <strong>Node.js 설치 · Codex 설치 · ChatGPT 로그인</strong>
         <p>각자 자기 컴퓨터에서 한 번만 설정합니다. 다른 사람이 앱을 받으면 그 사람 계정으로 다시 해야 합니다.</p>
       </div>
       <div>
@@ -190,29 +192,57 @@
       <li class="auto-step">
         <span class="auto-step-num" aria-hidden="true">2</span>
         <div class="auto-step-text">
-          <h4 class="auto-step-title">codex(코덱스) 설치하기</h4>
+          <h4 class="auto-step-title">Node.js가 있는지 확인하기</h4>
           <p class="auto-step-body">
-            아래 한 줄을 그대로 입력하고 <kbd>Enter</kbd>를 누르면 설치됩니다.
-            이 단계는 앱이 대신 하지 않습니다. (Node.js가 미리 설치돼 있어야 합니다.)
+            아래 두 줄을 차례로 입력합니다. 둘 다 <code>v20...</code>, <code>10...</code>처럼
+            버전 번호가 나오면 다음 단계로 가면 됩니다.
           </p>
-          <pre class="auto-cmd"><code>npm i -g &#64;openai/codex</code></pre>
+          <pre class="auto-cmd"><code>node -v
+npm -v</code></pre>
+          <p class="auto-step-body">
+            “인식할 수 없습니다”처럼 나오면 Node.js가 없는 상태입니다.
+            <a class="auto-link" href="https://nodejs.org/ko" target="_blank" rel="noreferrer noopener">nodejs.org/ko</a>
+            에서 <strong>LTS</strong> 버전을 설치한 뒤, PowerShell을 닫았다가 다시 열고
+            위 확인 명령을 다시 입력하세요.
+          </p>
         </div>
       </li>
       <li class="auto-step">
         <span class="auto-step-num" aria-hidden="true">3</span>
         <div class="auto-step-text">
-          <h4 class="auto-step-title">내 ChatGPT 계정으로 로그인하기</h4>
+          <h4 class="auto-step-title">codex(코덱스) 설치하기</h4>
           <p class="auto-step-body">
-            이어서 아래를 입력하고 <kbd>Enter</kbd>를 누릅니다. 웹브라우저가 열리며
-            <strong>ChatGPT 로그인 화면</strong>이 나오면, 평소 쓰던 ChatGPT 계정으로
-            로그인하면 됩니다(무료/구독 계정 모두 가능). 아이디·비밀번호는 이 앱에
-            입력하지 않습니다 — 로그인은 ChatGPT 공식 페이지에서만 이루어집니다.
+            Node.js 확인이 끝났으면 아래 한 줄을 그대로 입력하고 <kbd>Enter</kbd>를 누릅니다.
+            설치는 이 앱이 대신 하지 않습니다.
           </p>
-          <pre class="auto-cmd"><code>codex login</code></pre>
+          <pre class="auto-cmd"><code>npm i -g &#64;openai/codex</code></pre>
+          <p class="auto-step-body">
+            설치가 끝나면 아래 명령으로 codex가 잡히는지 확인합니다. 버전이나 도움말이
+            나오면 정상입니다.
+          </p>
+          <pre class="auto-cmd"><code>codex --version</code></pre>
         </div>
       </li>
       <li class="auto-step">
         <span class="auto-step-num" aria-hidden="true">4</span>
+        <div class="auto-step-text">
+          <h4 class="auto-step-title">내 ChatGPT 계정으로 로그인하기</h4>
+          <p class="auto-step-body">
+            아래 명령을 입력하거나, 앱의 [로그인] 화면에서
+            <strong>[ChatGPT로 로그인]</strong>을 누릅니다. 웹브라우저가 열리거나
+            화면에 짧은 코드가 나오면, 평소 쓰던 ChatGPT 계정으로 로그인하면 됩니다
+            (무료/구독 계정 모두 가능). 아이디·비밀번호는 이 앱에 입력하지 않습니다.
+          </p>
+          <pre class="auto-cmd"><code>codex login</code></pre>
+          <p class="auto-step-body">
+            로그인 후에는 아래 명령으로 상태를 확인할 수 있습니다. 이미 로그인되어
+            있으면 “logged in” 또는 그에 준하는 안내가 나옵니다.
+          </p>
+          <pre class="auto-cmd"><code>codex login status</code></pre>
+        </div>
+      </li>
+      <li class="auto-step">
+        <span class="auto-step-num" aria-hidden="true">5</span>
         <div class="auto-step-text">
           <h4 class="auto-step-title">앱에서 자동 모드 켜기</h4>
           <p class="auto-step-body">
@@ -221,15 +251,31 @@
             [추출 모드]에서 <strong>자동 LLM 모드</strong>를 고를 수 있게 됩니다. 이
             한 번의 설정 뒤로는 복사·붙여넣기 없이 바로 자동으로 정리돼요.
           </p>
+          <p class="auto-step-body">
+            자동 모드를 처음 실행할 때는 자동 연결 도구를 내려받느라
+            30초에서 1분 정도 멈춘 것처럼 보일 수 있습니다. 실패해도 앱은 꺼지지
+            않고, 언제든 복붙 모드로 계속 진행할 수 있습니다.
+          </p>
         </div>
       </li>
     </ol>
+
+    <div class="auto-trouble" role="note" aria-label="자동 모드가 막힐 때 확인할 것">
+      <h4 class="auto-trouble-title">막히면 여기부터 확인하세요</h4>
+      <ul class="auto-check-list">
+        <li><code>node -v</code>, <code>npm -v</code>가 안 나오면 Node.js LTS를 설치한 뒤 PowerShell을 새로 엽니다.</li>
+        <li><code>codex --version</code>이 안 나오면 <code>npm i -g &#64;openai/codex</code> 설치가 끝났는지 확인합니다.</li>
+        <li>로그인했는데 앱이 못 찾으면 앱의 [로그인] 화면에서 [다시 검출]을 누르거나 앱을 재시작합니다.</li>
+        <li>자동 추출이 중간에 막히면 고장으로 보지 말고, 같은 후보를 복붙 모드로 정리하면 됩니다.</li>
+      </ul>
+    </div>
 
     <p class="auto-setup-note" role="note">
       codex는 자동 모드가 동작하는 동안 백그라운드에서 내 계정 인증을 이어 주는
       도우미예요. 한 번 설치·로그인해 두면 계속 쓸 수 있고, 컴퓨터에 그대로 두면
       됩니다. 자동 모드가 잘 안 되거나 설치가 어려우면 언제든
-      <strong>방법 A(복붙)</strong>로 똑같이 모든 기능을 쓸 수 있으니 걱정하지 마세요.
+      <strong>방법 A(후보별 복붙)</strong>로 같은 검증 흐름을 계속 진행할 수 있으니
+      걱정하지 마세요.
     </p>
   </section>
 
@@ -595,6 +641,13 @@
     line-height: 1.6;
   }
 
+  .auto-link {
+    color: var(--accent-oxblood);
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
   .auto-cmd {
     margin: var(--space-xs) 0 0 0;
     padding: var(--space-sm) var(--space-md);
@@ -603,6 +656,7 @@
     border-radius: var(--radius-soft);
     overflow-x: auto;
   }
+
   .auto-cmd code {
     background: transparent;
     padding: 0;
@@ -617,6 +671,33 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-tight);
     background: var(--surface-base);
+  }
+
+  .auto-trouble {
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--warn-amber);
+    border-radius: var(--radius-tight);
+    background: var(--surface-elevated);
+  }
+
+  .auto-trouble-title {
+    margin: 0 0 var(--space-xs) 0;
+    font-family: var(--heading-family);
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .auto-check-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
   }
 
   .auto-setup-note {

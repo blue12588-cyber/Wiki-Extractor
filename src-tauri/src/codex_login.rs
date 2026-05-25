@@ -132,7 +132,10 @@ pub enum LoginOutcome {
     /// codex exited (login flow ran) but the re-detect still shows unauthed —
     /// the user likely cancelled the browser approval. Graceful; copy-paste
     /// stays available. Carries the detect snapshot + a Korean message.
-    NotAuthed { detect: CodexDetect, message: String },
+    NotAuthed {
+        detect: CodexDetect,
+        message: String,
+    },
     /// The device-code flow emitted a verification challenge (URL + code) and is
     /// waiting for the user to approve in the browser. We surface a Korean "다시
     /// 검출" hint together with the structured `verification` so the renderer can
@@ -218,11 +221,7 @@ const URL_FORBIDDEN_CHARS: &[char] = &[
 /// (the user copies it manually) but is NOT handed to the OS opener — so even a
 /// validated-but-unexpected host cannot trigger an automatic open
 /// (AC-LOGIN-GRACEFUL). Matching is case-insensitive, exact-host or dot-suffix.
-const VERIFICATION_HOST_ALLOWLIST: &[&str] = &[
-    "chatgpt.com",
-    "openai.com",
-    "auth.openai.com",
-];
+const VERIFICATION_HOST_ALLOWLIST: &[&str] = &["chatgpt.com", "openai.com", "auth.openai.com"];
 
 /// Extract the first http(s) URL token from a line, trimmed of trailing prose
 /// punctuation, then STRICTLY validate it. Returns the URL only when it: starts
@@ -266,10 +265,7 @@ fn is_safe_url(url: &str) -> bool {
     }
     // Reject ANY whitespace, ASCII control char, or shell-significant char.
     !url.chars().any(|c| {
-        c.is_whitespace()
-            || c.is_control()
-            || (c as u32) < 0x20
-            || URL_FORBIDDEN_CHARS.contains(&c)
+        c.is_whitespace() || c.is_control() || (c as u32) < 0x20 || URL_FORBIDDEN_CHARS.contains(&c)
     })
 }
 
@@ -318,7 +314,9 @@ fn host_is_allowed(url: &str) -> bool {
 /// prints exactly this. We require the hyphenated two-group form so we never
 /// mistake an arbitrary word for the code. Returned uppercased (display norm).
 fn parse_device_code(line: &str) -> Option<String> {
-    for raw_tok in line.split(|c: char| c.is_whitespace() || matches!(c, ':' | '"' | '\'' | '(' | ')' | '[' | ']')) {
+    for raw_tok in line
+        .split(|c: char| c.is_whitespace() || matches!(c, ':' | '"' | '\'' | '(' | ')' | '[' | ']'))
+    {
         let tok = raw_tok.trim();
         if let Some((a, b)) = tok.split_once('-') {
             let group_ok = |g: &str| {
@@ -681,7 +679,10 @@ mod tests {
             Some("WXYZ-1234")
         );
         // Lowercase is normalized to uppercase for display.
-        assert_eq!(parse_device_code("code: abcd-5678").as_deref(), Some("ABCD-5678"));
+        assert_eq!(
+            parse_device_code("code: abcd-5678").as_deref(),
+            Some("ABCD-5678")
+        );
     }
 
     #[test]
@@ -733,7 +734,10 @@ mod tests {
         // the T1 static-scan forbidden-pattern sentinel, which legitimately bans
         // that identifier in code). The security property under test is that ANY
         // `%`-bearing URL token is rejected — the specific env-var name is moot.
-        let percent_env_probe = format!("url https://chatgpt.com/%{}%", "USER".to_string() + "PROFILE");
+        let percent_env_probe = format!(
+            "url https://chatgpt.com/%{}%",
+            "USER".to_string() + "PROFILE"
+        );
         let mut hostile: Vec<String> = vec![
             "Open https://chatgpt.com/&calc and enter code".to_string(),
             "visit https://chatgpt.com/|whoami now".to_string(),
@@ -773,7 +777,9 @@ mod tests {
         assert!(!is_safe_url(&long));
         // A clean, bounded device-auth URL passes.
         assert!(is_safe_url("https://chatgpt.com/device"));
-        assert!(is_safe_url("https://auth.openai.com/activate?user_code=WXYZ-1234"));
+        assert!(is_safe_url(
+            "https://auth.openai.com/activate?user_code=WXYZ-1234"
+        ));
     }
 
     /// The opener refuses to auto-open a syntactically-safe URL whose host is NOT
@@ -788,7 +794,9 @@ mod tests {
         assert!(!open_in_browser("https://notopenai.com/activate"));
         // Allow-list hosts + a real subdomain are accepted by the host gate.
         assert!(host_is_allowed("https://chatgpt.com/device"));
-        assert!(host_is_allowed("https://auth.openai.com/activate?user_code=WXYZ-1234"));
+        assert!(host_is_allowed(
+            "https://auth.openai.com/activate?user_code=WXYZ-1234"
+        ));
         assert!(host_is_allowed("https://platform.openai.com/x"));
         // Look-alike / suffix-confusion hosts are NOT on the allow-list.
         assert!(!host_is_allowed("https://chatgpt.com.evil.com/device"));
@@ -849,7 +857,9 @@ mod tests {
 
     #[test]
     fn outcome_serializes_with_state_tag() {
-        let o = LoginOutcome::CliMissing { message: "x".into() };
+        let o = LoginOutcome::CliMissing {
+            message: "x".into(),
+        };
         let json = serde_json::to_string(&o).unwrap();
         assert!(json.contains("\"state\":\"cli_missing\""));
     }

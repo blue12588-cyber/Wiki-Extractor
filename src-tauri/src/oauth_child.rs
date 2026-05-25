@@ -58,6 +58,8 @@
 //! All new shell args are FIXED LITERALS (`wsl.exe`, `--`, `npx`,
 //! `openai-oauth`, `--port`, and the numeric port) — no user input reaches them.
 
+use std::fs;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Mutex;
 
@@ -65,6 +67,18 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    System::{
+        JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        },
+        Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
+    },
+};
 
 use crate::codex_detect::{detect_codex, CodexOrigin};
 
@@ -100,6 +114,12 @@ static CHILD_STATUS: Lazy<Mutex<ChildStatus>> = Lazy::new(|| Mutex::new(ChildSta
 /// app exit reaps the child even if `kill_oauth_child` is not called.
 static CHILD_HANDLE: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
 
+/// Windows-only owner for the Job Object assigned to the app-spawned proxy
+/// process tree. Reused/cached proxies are intentionally never assigned here:
+/// the app only kills what it spawned in this session.
+#[cfg(windows)]
+static CHILD_JOB: Lazy<Mutex<Option<WindowsJob>>> = Lazy::new(|| Mutex::new(None));
+
 /// Owning handle to a spawned openai-oauth child (renderer-facing summary; the
 /// real `tokio::process::Child` lives in `CHILD_HANDLE`).
 pub struct OAuthChild {
@@ -117,6 +137,7 @@ pub struct OAuthChild {
 // covers a cold download; a warm npx cache resolves in ~1-2s so the longer
 // ceiling only matters on the very first auto-mode run.
 const READY_TIMEOUT_MS: u64 = 60_000;
+const PROXY_HEALTH_TIMEOUT_MS: u64 = 800;
 
 /// Windows `CREATE_NO_WINDOW` (0x0800_0000): the proxy is a long-running child;
 /// without this flag `cmd /C npx …` pops a visible console window that lingers
@@ -124,6 +145,82 @@ const READY_TIMEOUT_MS: u64 = 60_000;
 /// and scanned for the ready URL).
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct WindowsJob {
+    handle: usize,
+}
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn handle(&self) -> HANDLE {
+        self.handle as HANDLE
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.handle());
+        }
+    }
+}
+
+#[cfg(windows)]
+fn create_kill_on_close_job() -> Option<WindowsJob> {
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return None;
+        }
+
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 {
+            let _ = CloseHandle(job);
+            return None;
+        }
+
+        Some(WindowsJob {
+            handle: job as usize,
+        })
+    }
+}
+
+#[cfg(windows)]
+fn assign_child_to_job(child: &Child, job: &WindowsJob) -> bool {
+    let Some(pid) = child.id() else {
+        return false;
+    };
+
+    unsafe {
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let assigned = AssignProcessToJobObject(job.handle(), process) != 0;
+        let _ = CloseHandle(process);
+        assigned
+    }
+}
+
+#[cfg(windows)]
+fn close_owned_job() -> bool {
+    CHILD_JOB.lock().ok().and_then(|mut g| g.take()).is_some()
+}
+
+#[cfg(not(windows))]
+fn close_owned_job() -> bool {
+    false
+}
 
 /// Parse a single line of openai-oauth stdout for the ready URL pattern.
 /// Returns the (port, full URL) tuple iff the line matches
@@ -160,6 +257,184 @@ fn already_ready() -> Option<(u16, String)> {
         }
     }
     None
+}
+
+fn proxy_cache_path() -> PathBuf {
+    // Runtime-only reuse hint. Keep this independent from the process working
+    // directory because release apps can be launched from Explorer, installers,
+    // terminals, or shortcuts with different CWDs.
+    std::env::temp_dir()
+        .join("llmwiki")
+        .join("runtime")
+        .join("oauth_proxy.json")
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct CachedProxy {
+    port: u16,
+    url: String,
+    pid: u32,
+    origin: CodexOrigin,
+    user_marker: String,
+}
+
+fn current_user_marker() -> String {
+    std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_default()
+}
+
+fn read_cached_proxy(origin: CodexOrigin) -> Option<CachedProxy> {
+    let txt = fs::read_to_string(proxy_cache_path()).ok()?;
+    let cached: CachedProxy = serde_json::from_str(&txt).ok()?;
+    let (port, url) = parse_ready_line(&cached.url)?;
+    if port != cached.port {
+        return None;
+    }
+    if cached.origin != origin || cached.user_marker != current_user_marker() || cached.pid == 0 {
+        return None;
+    }
+    Some(CachedProxy {
+        port,
+        url,
+        pid: cached.pid,
+        origin: cached.origin,
+        user_marker: cached.user_marker,
+    })
+}
+
+fn write_cached_proxy(port: u16, url: &str, origin: CodexOrigin, pid: Option<u32>) {
+    let Some(pid) = pid else {
+        return;
+    };
+    let path = proxy_cache_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let cached = CachedProxy {
+        port,
+        url: url.to_string(),
+        pid,
+        origin,
+        user_marker: current_user_marker(),
+    };
+    if let Ok(txt) = serde_json::to_string(&cached) {
+        let _ = fs::write(path, txt.as_bytes());
+    }
+}
+
+fn clear_cached_proxy() {
+    let _ = fs::remove_file(proxy_cache_path());
+}
+
+fn health_url_from_ready_url(url: &str) -> Option<String> {
+    let (port, _) = parse_ready_line(url)?;
+    Some(format!("http://127.0.0.1:{port}/health"))
+}
+
+fn models_url_from_ready_url(url: &str) -> Option<String> {
+    let (port, _) = parse_ready_line(url)?;
+    Some(format!("http://127.0.0.1:{port}/models"))
+}
+
+async fn probe_cached_proxy(origin: CodexOrigin) -> Option<(u16, String)> {
+    let cached = read_cached_proxy(origin)?;
+    if !probe_ready_url(&cached.url).await {
+        clear_cached_proxy();
+        return None;
+    }
+    // Reuse only when all three checks agree: the cached URL is healthy, the
+    // proxy fingerprint looks like openai-oauth, and a port-bound openai-oauth
+    // process is present. A generic localhost OpenAI-compatible server must not
+    // receive the user's source text by accident.
+    let process_ok = probe_cached_process(cached.pid, cached.port).await;
+    let fingerprint_ok = probe_proxy_fingerprint(&cached.url).await;
+    if process_ok && fingerprint_ok {
+        return Some((cached.port, cached.url));
+    }
+    clear_cached_proxy();
+    None
+}
+
+#[cfg(windows)]
+async fn probe_cached_process(_pid: u32, port: u16) -> bool {
+    let script = format!(
+        r#"
+$q = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.CommandLine -match 'openai-oauth' -and $_.CommandLine -match '--port\s+{port}\b' }} |
+  Select-Object -First 1
+if ($q) {{ Write-Output 'ok' }}
+"#
+    );
+    let mut command = Command::new("powershell.exe");
+    command
+        .args(["-NoProfile", "-Command", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = command.output().await.ok();
+    output
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim() == "ok")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+async fn probe_cached_process(_pid: u32, _port: u16) -> bool {
+    // Non-Windows hosts cannot prove the cached PID is an openai-oauth process
+    // bound to the cached port with the lightweight tools this app uses. Avoid
+    // fail-open reuse; spawning a fresh proxy is safer than sending text to an
+    // unproven localhost server.
+    false
+}
+
+fn is_openai_oauth_fingerprint(text: &str) -> bool {
+    text.contains("codex-oauth")
+}
+
+async fn probe_ready_url(url: &str) -> bool {
+    let Some(health_url) = health_url_from_ready_url(url) else {
+        return false;
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(PROXY_HEALTH_TIMEOUT_MS))
+        .build()
+        .ok();
+    let Some(client) = client else {
+        return false;
+    };
+    match client.get(health_url).send().await {
+        Ok(resp) => resp.status().is_success(),
+        _ => false,
+    }
+}
+
+async fn probe_proxy_fingerprint(url: &str) -> bool {
+    let Some(models_url) = models_url_from_ready_url(url) else {
+        return false;
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(PROXY_HEALTH_TIMEOUT_MS))
+        .build()
+        .ok();
+    let Some(client) = client else {
+        return false;
+    };
+    let Ok(resp) = client.get(models_url).send().await else {
+        return false;
+    };
+    if !resp.status().is_success() {
+        return false;
+    }
+    let Ok(text) = resp.text().await else {
+        return false;
+    };
+    is_openai_oauth_fingerprint(&text)
 }
 
 /// Build the `npx openai-oauth --port <P>` spawn command for the detected codex
@@ -221,7 +496,27 @@ pub async fn spawn_oauth_child(
 ) -> Result<OAuthChild, OAuthChildError> {
     // Idempotent: if a proxy is already Ready, reuse it.
     if let Some((port, url)) = already_ready() {
-        return Ok(OAuthChild { port, ready_url: url });
+        if probe_ready_url(&url).await {
+            return Ok(OAuthChild {
+                port,
+                ready_url: url,
+            });
+        }
+        reset_tracked_child_for_respawn().await;
+    }
+    // App restarts lose the in-memory child handle, but a previous openai-oauth
+    // proxy can still be alive on localhost. Reuse the cached ready URL when its
+    // no-payload /health endpoint answers, so opening the app or starting a new
+    // auto batch does not spawn another orphaned proxy.
+    if let Some((port, url)) = probe_cached_proxy(origin).await {
+        set_status(ChildStatus::Ready {
+            port,
+            url: url.clone(),
+        });
+        return Ok(OAuthChild {
+            port,
+            ready_url: url,
+        });
     }
 
     set_status(ChildStatus::Spawning);
@@ -238,6 +533,20 @@ pub async fn spawn_oauth_child(
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
+    #[cfg(windows)]
+    let child_job = match create_kill_on_close_job() {
+        Some(job) => job,
+        None => {
+            let reason =
+                "openai-oauth 프로세스 보호용 Windows Job Object를 준비할 수 없습니다. 복붙 모드로 전환합니다."
+                    .to_string();
+            set_status(ChildStatus::Degraded {
+                reason: reason.clone(),
+            });
+            return Err(OAuthChildError::SpawnFailed(reason));
+        }
+    };
+
     let mut child = command.spawn().map_err(|e| {
         // Origin-aware Korean reason: a WSL cross-boundary spawn failure is
         // attributed to WSL/wsl.exe so the user knows the fallback was attempted;
@@ -250,6 +559,21 @@ pub async fn spawn_oauth_child(
         set_status(ChildStatus::Degraded { reason: reason.clone() });
         OAuthChildError::SpawnFailed(reason)
     })?;
+
+    #[cfg(windows)]
+    let child_job = if assign_child_to_job(&child, &child_job) {
+        Some(child_job)
+    } else {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        let reason =
+            "openai-oauth 프로세스를 Windows Job Object에 묶지 못해 중지했습니다. 복붙 모드로 전환합니다."
+                .to_string();
+        set_status(ChildStatus::Degraded {
+            reason: reason.clone(),
+        });
+        return Err(OAuthChildError::SpawnFailed(reason));
+    };
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -273,11 +597,24 @@ pub async fn spawn_oauth_child(
 
     match ready {
         Some((port, url)) => {
-            set_status(ChildStatus::Ready { port, url: url.clone() });
+            set_status(ChildStatus::Ready {
+                port,
+                url: url.clone(),
+            });
+            write_cached_proxy(port, &url, origin, child.id());
             if let Ok(mut g) = CHILD_HANDLE.lock() {
                 *g = Some(child);
             }
-            Ok(OAuthChild { port, ready_url: url })
+            #[cfg(windows)]
+            if let Some(job) = child_job {
+                if let Ok(mut g) = CHILD_JOB.lock() {
+                    *g = Some(job);
+                }
+            }
+            Ok(OAuthChild {
+                port,
+                ready_url: url,
+            })
         }
         None => {
             // No ready line within the window → grammar mismatch stop_condition.
@@ -356,6 +693,37 @@ pub async fn kill_oauth_child(_child: OAuthChild) {
     let taken = CHILD_HANDLE.lock().ok().and_then(|mut g| g.take());
     if let Some(mut c) = taken {
         let _ = c.kill().await;
+        clear_cached_proxy();
+    }
+    if close_owned_job() {
+        clear_cached_proxy();
+    }
+    set_status(ChildStatus::Idle);
+}
+
+async fn reset_tracked_child_for_respawn() {
+    let taken = CHILD_HANDLE.lock().ok().and_then(|mut g| g.take());
+    if let Some(mut c) = taken {
+        let _ = c.kill().await;
+    }
+    let _ = close_owned_job();
+    clear_cached_proxy();
+    set_status(ChildStatus::Idle);
+}
+
+/// Synchronous shutdown path for app exit. `RunEvent::Exit` cannot await the
+/// async Tauri command, so request a child kill immediately and close the owned
+/// Windows Job Object. Closing the job reaps descendants such as `node.exe`.
+/// Reused/discovered proxies are not in `CHILD_HANDLE`/`CHILD_JOB`, so they are
+/// left alone.
+pub fn shutdown_oauth_child_sync() {
+    let taken = CHILD_HANDLE.lock().ok().and_then(|mut g| g.take());
+    if let Some(mut c) = taken {
+        let _ = c.start_kill();
+        clear_cached_proxy();
+    }
+    if close_owned_job() {
+        clear_cached_proxy();
     }
     set_status(ChildStatus::Idle);
 }
@@ -402,7 +770,11 @@ pub async fn oauth_proxy_start() -> ChildStatus {
 /// Tauri command: stop the proxy (graceful). Always returns Idle status.
 #[tauri::command]
 pub async fn oauth_proxy_stop() -> ChildStatus {
-    kill_oauth_child(OAuthChild { port: 0, ready_url: String::new() }).await;
+    kill_oauth_child(OAuthChild {
+        port: 0,
+        ready_url: String::new(),
+    })
+    .await;
     oauth_child_status()
 }
 
@@ -414,7 +786,10 @@ mod tests {
     fn parses_canonical_ready_line() {
         let line = "OpenAI-compatible endpoint ready at http://127.0.0.1:10531/v1";
         let parsed = parse_ready_line(line);
-        assert_eq!(parsed, Some((10531, "http://127.0.0.1:10531/v1".to_string())));
+        assert_eq!(
+            parsed,
+            Some((10531, "http://127.0.0.1:10531/v1".to_string()))
+        );
     }
 
     #[test]
@@ -427,6 +802,30 @@ mod tests {
     fn rejects_non_loopback() {
         let line = "http://0.0.0.0:10531/v1";
         assert_eq!(parse_ready_line(line), None);
+    }
+
+    #[test]
+    fn health_url_uses_proxy_root_not_v1_path() {
+        assert_eq!(
+            health_url_from_ready_url("http://127.0.0.1:61257/v1"),
+            Some("http://127.0.0.1:61257/health".to_string())
+        );
+        assert_eq!(
+            models_url_from_ready_url("http://127.0.0.1:61257/v1"),
+            Some("http://127.0.0.1:61257/models".to_string())
+        );
+        assert_eq!(health_url_from_ready_url("http://0.0.0.0:61257/v1"), None);
+        assert_eq!(models_url_from_ready_url("http://0.0.0.0:61257/v1"), None);
+    }
+
+    #[test]
+    fn proxy_fingerprint_requires_codex_oauth_marker() {
+        assert!(is_openai_oauth_fingerprint(
+            r#"{"object":"list","data":[{"id":"codex-oauth"}]}"#
+        ));
+        assert!(!is_openai_oauth_fingerprint(
+            r#"{"object":"list","data":[]}"#
+        ));
     }
 
     // AC-PROXY-ORIGIN: build_proxy_command must branch on origin without
@@ -464,6 +863,36 @@ mod tests {
         assert!(
             src.contains("origin == CodexOrigin::Wsl"),
             "proxy spawn must branch on the detected codex origin"
+        );
+        let production_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(
+            src.contains("probe_cached_proxy(origin).await")
+                && src.contains("probe_cached_process")
+                && src.contains("probe_proxy_fingerprint")
+                && src.contains("process_ok && fingerprint_ok")
+                && src.contains("write_cached_proxy(port, &url, origin, child.id())")
+                && production_src.contains("std::env::temp_dir()")
+                && !production_src.contains("current_dir()")
+                && src.contains("/health")
+                && src.contains("/models"),
+            "proxy start must probe app-owned cached localhost proxy before spawning a new one"
+        );
+        assert!(
+            !production_src.contains("|| probe_proxy_fingerprint"),
+            "cached proxy reuse must not accept process OR fingerprint; it must require both"
+        );
+        let object_list = format!("\"{}\":\"{}\"", "object", "list");
+        assert!(
+            !production_src.contains(&object_list),
+            "cached proxy fingerprint must not accept a generic OpenAI-compatible /models object list"
+        );
+        assert!(
+            src.contains("CreateJobObjectW")
+                && src.contains("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE")
+                && src.contains("AssignProcessToJobObject")
+                && src.contains("Windows Job Object에 묶지 못해 중지했습니다")
+                && src.contains("shutdown_oauth_child_sync"),
+            "app-spawned proxy must be assigned to a Windows kill-on-close Job Object and expose a sync shutdown hook"
         );
         // No formatted/concatenated argument is passed to the proxy command
         // (only the numeric port, via `port.to_string()`, is interpolated). The

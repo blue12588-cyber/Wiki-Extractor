@@ -41,6 +41,7 @@ import {
   tokenize,
   tokenSimilarity,
 } from './keywordMatch';
+import { structuralReasonForCandidate } from './structuralFilter';
 
 export type RecommendedAction =
   | 'create_new'
@@ -130,7 +131,7 @@ function scoreSchemaFit(
   needle: Set<string>,
 ): { score: number; matched: string[] } {
   if (needle.size === 0) return { score: 0, matched: [] };
-  const hay = `${c.title}\n${c.summary}\n${c.evidence_text}`;
+  const hay = `${c.title}\n${c.summary}\n${c.evidence_text}\n${(c.original_terms ?? []).join('\n')}`;
   const n = overlapCount(needle, hay);
   const matched = overlapTerms(needle, hay);
   // 0 matches → 0; 1 → 1; 2 → 2; 3+ → 3 (capped, deterministic).
@@ -199,6 +200,19 @@ function scoreReusability(
   return { score: Math.min(score, 3), note: parts.join(' · ') };
 }
 
+function containedTokenSimilarity(aText: string, bText: string): number {
+  const a = tokenize(aText);
+  const b = tokenize(bText);
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter += 1;
+  if (inter === 0) return 0;
+  // One shared term is useful for "related", but two or more shared identity
+  // terms are needed before we treat an existing hub as a likely update target.
+  if (inter === 1) return 0.25;
+  return inter / Math.min(a.size, b.size);
+}
+
 function scoreNovelty(
   c: CandidateItem,
   existingEntries: WikiEntry[],
@@ -208,11 +222,25 @@ function scoreNovelty(
   }
   let bestSim = 0;
   let target: WikiEntry | null = null;
-  const candText = `${c.title} ${c.summary}`;
+  const candText = `${c.title} ${c.summary} ${(c.original_terms ?? []).join(' ')}`;
   for (const e of existingEntries) {
-    // Compare against the entry's title + tags + related (its identity surface).
-    const entryText = `${e.title} ${e.tags.join(' ')} ${e.summary ?? ''}`;
-    const sim = tokenSimilarity(candText, entryText);
+    // Compare against the entry's title + tags + original terms + related
+    // identity surface, mirroring the promoted local wiki shape.
+    const entryText = [
+      e.title,
+      e.tags.join(' '),
+      (e.original_terms ?? []).join(' '),
+      e.related.join(' '),
+      e.summary ?? '',
+    ].join(' ');
+    const sim = Math.max(
+      tokenSimilarity(candText, entryText),
+      tokenSimilarity((c.original_terms ?? []).join(' '), entryText),
+      containedTokenSimilarity(
+        [c.title, ...(c.original_terms ?? [])].join(' '),
+        [e.title, ...e.tags, ...(e.original_terms ?? []), ...e.related].join(' '),
+      ),
+    );
     if (sim > bestSim) {
       bestSim = sim;
       target = e;
@@ -228,6 +256,14 @@ function scoreNovelty(
 function scoreBoundary(c: CandidateItem): { score: number; notes: string[] } {
   const notes: string[] = [];
   let score = 0;
+  const hay = `${c.title}\n${c.summary}\n${c.evidence_text}`;
+  if (
+    /\b(not by itself|does not prove|cannot establish|requires?|must not|should not|do not|without|rather than|not as)\b/i.test(hay) ||
+    /(?:만으로는|증명하지|입증하지|요구|필요|한계|경계|검증)/.test(hay)
+  ) {
+    notes.push('경계 신호 — 이 후보는 무엇을 증명하지 못하는지도 함께 보존하세요');
+    score += 1;
+  }
   // A single-source, single-evidence candidate has a clear (narrow) boundary:
   // it can only speak for THIS passage. Naming that boundary is itself valuable.
   if (c.evidence_refs.length <= 1) {
@@ -242,7 +278,7 @@ function scoreBoundary(c: CandidateItem): { score: number; notes: string[] } {
     notes.push('직접 인용입니다 — 저자의 결론으로 확대하지 마세요');
     score += 1;
   }
-  return { score: Math.min(score, 2), notes };
+  return { score: Math.min(score, 3), notes };
 }
 
 /* --------------------------- classification --------------------------- */
@@ -251,11 +287,12 @@ function classify(
   total: number,
   novelty: { bestSim: number; target: WikiEntry | null },
   demote: DemoteSignal,
+  structuralReason: string | null,
 ): { action: RecommendedAction; target: WikiEntry | null } {
   // AC-DEMOTE: a structural chunk (footnote / bibliography / toc / index /
   // copyright) is NEVER a wiki candidate. Demotion is a hard override — it
   // ignores the item regardless of its other (incidental) sub-scores.
-  if (demote.demoted) {
+  if (demote.demoted || structuralReason) {
     return { action: 'ignore', target: null };
   }
   if (total <= IGNORE_TOTAL) {
@@ -289,7 +326,8 @@ export function scoreCandidate(
   const nv = scoreNovelty(c, existingEntries);
   const bd = scoreBoundary(c);
   const demote = detectDemotion(`${c.title}\n${c.summary}\n${c.evidence_text}`);
-  const demotion_penalty = demote.demoted ? -(demote.kinds.length * 3) : 0;
+  const structuralReason = structuralReasonForCandidate(c);
+  const demotion_penalty = structuralReason ? -99 : demote.demoted ? -(demote.kinds.length * 3) : 0;
 
   const sub: SubScores = {
     schema_fit: sf.score,
@@ -309,11 +347,12 @@ export function scoreCandidate(
     sub.boundary +
     sub.demotion_penalty;
 
-  const cls = classify(total, nv, demote);
+  const cls = classify(total, nv, demote, structuralReason);
 
   // Build the NON-numeric, Korean rationale.
   const why: string[] = [];
   if (sf.matched.length) why.push(`목차/주제어 일치: ${sf.matched.join(', ')}`);
+  if (c.original_terms?.length) why.push(`핵심 원어/용어: ${c.original_terms.slice(0, 6).join(', ')}`);
   if (cs.verbs.length) why.push(`주장 동사 탐지: ${Array.from(new Set(cs.verbs)).join(', ')}`);
   if (eq.note) why.push(`근거: ${eq.note}`);
   if (ru.note) why.push(ru.note);
@@ -326,7 +365,7 @@ export function scoreCandidate(
     matched_keywords: sf.matched,
     claim_verbs: Array.from(new Set(cs.verbs)),
     boundary: bd.notes,
-    demotion: demote.reasons,
+    demotion: structuralReason ? [structuralReason, ...demote.reasons] : demote.reasons,
   };
 
   return {

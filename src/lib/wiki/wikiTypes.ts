@@ -48,6 +48,8 @@ export interface WikiEntry {
   summary: string | null;
   claims: WikiClaim[];
   source_ids: string[];
+  /** Source-visible original/core terms carried over from promoted candidates. */
+  original_terms: string[];
   tags: string[];
   related: string[];
   created_from_candidates: string[];
