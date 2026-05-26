@@ -27,6 +27,7 @@
     initial_reason?: string;
     initial_success_text?: string;
     onselect?: (file: File) => void;
+    onselectmany?: (files: File[]) => void;
   };
 
   let {
@@ -34,6 +35,7 @@
     initial_reason = '',
     initial_success_text = '',
     onselect,
+    onselectmany,
   }: Props = $props();
 
   // Round-1 surface: the props are *initial* values only — they seed the
@@ -64,9 +66,13 @@
 
   function on_files(file_list: FileList | null) {
     if (!file_list || file_list.length === 0) return;
-    const f = file_list[0];
+    const files = Array.from(file_list);
     zone_state = 'accepting';
-    onselect?.(f);
+    if (files.length === 1) {
+      onselect?.(files[0]);
+      return;
+    }
+    onselectmany?.(files);
   }
 
   function on_change(ev: Event) {
@@ -173,7 +179,7 @@
   <div class="copy">
     {#if zone_state === 'idle'}
       <p class="primary">Drop a file here or click to pick</p>
-      <p id={accepted_hint_id} class="hint">Plaintext, Markdown, or PDF</p>
+      <p id={accepted_hint_id} class="hint">Plaintext, Markdown, or PDF · multiple files OK</p>
     {:else if zone_state === 'drag-over'}
       <p class="primary">Release to upload</p>
       <p id={accepted_hint_id} class="hint">{accepted_mime}</p>
@@ -197,6 +203,7 @@
     class="hidden-input"
     tabindex="-1"
     aria-hidden="true"
+    multiple
   />
 </div>
 

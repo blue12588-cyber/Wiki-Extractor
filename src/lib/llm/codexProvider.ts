@@ -55,7 +55,7 @@ export async function ensureProxy(): Promise<OAuthChildSnapshot> {
   try {
     return await invoke<OAuthChildSnapshot>('oauth_proxy_start');
   } catch {
-    return { state: 'degraded', reason: 'openai-oauth 프록시를 시작하지 못했습니다. 복붙 모드로 전환하세요.' };
+    return { state: 'degraded', reason: '자동 LLM 연결 도구를 시작하지 못했습니다. 복붙 브릿지를 사용하세요.' };
   }
 }
 
@@ -81,7 +81,7 @@ export const codexProvider: ExtractionProvider = {
         degraded: true,
         message:
           proxy.reason ??
-          'openai-oauth 프록시가 준비되지 않았습니다(codex 인증/Node 확인). 복붙 모드로 후보를 정리할 수 있습니다.',
+          '자동 LLM 연결이 준비되지 않았습니다(Codex 인증/Node 확인). 복붙 브릿지로 후보를 정리할 수 있습니다.',
       };
     }
 
@@ -93,7 +93,7 @@ export const codexProvider: ExtractionProvider = {
         return {
           ok: false,
           degraded: true,
-          message: '자동 LLM 응답이 비어 있습니다. 복붙 모드로 다시 시도할 수 있습니다.',
+          message: '자동 LLM 응답이 비어 있습니다. 복붙 브릿지로 다시 시도할 수 있습니다.',
         };
       }
       return { ok: true, rawText };
@@ -110,7 +110,7 @@ export const codexProvider: ExtractionProvider = {
         degraded: e?.degraded ?? true,
         message:
           e?.reason ??
-          '자동 LLM 호출에 실패했습니다(인증/네트워크). 복붙 모드로 후보를 정리하세요(앱은 계속 동작합니다).',
+          '자동 LLM 호출에 실패했습니다(인증/네트워크). 복붙 브릿지로 후보를 정리하세요(앱은 계속 동작합니다).',
       };
     }
   },

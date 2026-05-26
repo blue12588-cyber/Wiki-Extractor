@@ -14,7 +14,7 @@
  * the safe default for the non-Tauri context.
  */
 
-import { readable, type Readable } from 'svelte/store';
+import { derived, readable, type Readable } from 'svelte/store';
 import { deriveAuthState, type AuthState, type OAuthChildStatus } from './state';
 import { fetchAuthFilePresent, fetchDevFallbackStatus } from './devFallback';
 
@@ -23,6 +23,13 @@ interface OAuthChildSnapshot {
   port?: number;
   url?: string;
   reason?: string;
+}
+
+export interface AuthUiSnapshot {
+  state: AuthState;
+  codexAuthPresent: boolean;
+  devFallbackFlag: boolean;
+  oauthChild: OAuthChildSnapshot;
 }
 
 function resolveInvoke(): (<T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) | null {
@@ -34,30 +41,44 @@ function resolveInvoke(): (<T>(cmd: string, args?: Record<string, unknown>) => P
   return typeof fn === 'function' ? fn : null;
 }
 
-async function fetchOAuthChildStatus(): Promise<OAuthChildStatus> {
+async function fetchOAuthChildSnapshot(): Promise<OAuthChildSnapshot> {
   const invoke = resolveInvoke();
-  if (!invoke) return 'idle';
+  if (!invoke) return { state: 'idle' };
   try {
-    const snap = await invoke<OAuthChildSnapshot>('oauth_child_status');
-    return snap.state;
+    return await invoke<OAuthChildSnapshot>('oauth_child_status');
   } catch {
-    return 'idle';
+    return { state: 'idle' };
   }
+}
+
+function toOauthChildStatus(snap: OAuthChildSnapshot): OAuthChildStatus {
+  return snap.state;
 }
 
 const POLL_MS = 2000;
 
-export const authState: Readable<AuthState> = readable<AuthState>('unconfigured', (set) => {
+export const authSnapshot: Readable<AuthUiSnapshot> = readable<AuthUiSnapshot>({
+  state: 'unconfigured',
+  codexAuthPresent: false,
+  devFallbackFlag: false,
+  oauthChild: { state: 'idle' },
+}, (set) => {
   let cancelled = false;
   async function tick() {
     if (cancelled) return;
-    const [codexAuthPresent, devFallbackFlag, oauthChildStatus] = await Promise.all([
+    const [codexAuthPresent, devFallbackFlag, oauthChild] = await Promise.all([
       fetchAuthFilePresent(),
       fetchDevFallbackStatus(),
-      fetchOAuthChildStatus(),
+      fetchOAuthChildSnapshot(),
     ]);
     if (cancelled) return;
-    set(deriveAuthState({ codexAuthPresent, devFallbackFlag, oauthChildStatus }));
+    const oauthChildStatus = toOauthChildStatus(oauthChild);
+    set({
+      state: deriveAuthState({ codexAuthPresent, devFallbackFlag, oauthChildStatus }),
+      codexAuthPresent,
+      devFallbackFlag,
+      oauthChild,
+    });
   }
   tick();
   const id = setInterval(tick, POLL_MS);
@@ -67,11 +88,14 @@ export const authState: Readable<AuthState> = readable<AuthState>('unconfigured'
   };
 });
 
+export const authState: Readable<AuthState> = derived(authSnapshot, ($snapshot) => $snapshot.state);
+
 export async function snapshotAuthState(): Promise<AuthState> {
-  const [codexAuthPresent, devFallbackFlag, oauthChildStatus] = await Promise.all([
+  const [codexAuthPresent, devFallbackFlag, oauthChild] = await Promise.all([
     fetchAuthFilePresent(),
     fetchDevFallbackStatus(),
-    fetchOAuthChildStatus(),
+    fetchOAuthChildSnapshot(),
   ]);
+  const oauthChildStatus = toOauthChildStatus(oauthChild);
   return deriveAuthState({ codexAuthPresent, devFallbackFlag, oauthChildStatus });
 }

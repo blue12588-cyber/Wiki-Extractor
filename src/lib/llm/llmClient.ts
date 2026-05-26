@@ -44,6 +44,14 @@ export type LlmResult<T> =
   | { ok: true; value: T }
   | { ok: false; degraded: boolean; message: string };
 
+export interface LlmClaimReview {
+  statement_ko: string;
+  translation_ko: string;
+  review_note_ko: string;
+  recommended_action: 'keep' | 'revise' | 'discard' | string;
+  boundary_note: string;
+}
+
 export async function llmConfig(): Promise<LlmConfigSnapshot> {
   const invoke = resolveInvoke();
   if (!invoke) {
@@ -60,7 +68,8 @@ function offlineResult<T>(): LlmResult<T> {
   return {
     ok: false,
     degraded: true,
-    message: 'LLM 경로를 사용할 수 없습니다(오프라인/Tauri 외부). 보기·편집·저장은 그대로 동작합니다.',
+    message:
+      '자동 LLM 연결을 사용할 수 없습니다. 번역·자동 생성은 건너뛰며, 보기·편집·저장은 그대로 동작합니다.',
   };
 }
 
@@ -136,6 +145,33 @@ export async function llmTranslate(originalText: string): Promise<LlmResult<stri
     const content = await invoke<string>('llm_translate', { args: { original_text: originalText } });
     const parsed = parseJsonLoose<{ translation?: string }>(content);
     return { ok: true, value: String(parsed.translation ?? '') };
+  } catch (err) {
+    return toResult(err);
+  }
+}
+
+/** Review one offline-created claim and return editable Korean fields. */
+export async function llmReviewClaim(
+  statement: string,
+  originalText: string,
+): Promise<LlmResult<LlmClaimReview>> {
+  const invoke = resolveInvoke();
+  if (!invoke) return offlineResult();
+  try {
+    const content = await invoke<string>('llm_review_claim', {
+      args: { statement, original_text: originalText },
+    });
+    const parsed = parseJsonLoose<Partial<LlmClaimReview>>(content);
+    return {
+      ok: true,
+      value: {
+        statement_ko: String(parsed.statement_ko ?? ''),
+        translation_ko: String(parsed.translation_ko ?? ''),
+        review_note_ko: String(parsed.review_note_ko ?? ''),
+        recommended_action: String(parsed.recommended_action ?? 'revise'),
+        boundary_note: String(parsed.boundary_note ?? ''),
+      },
+    };
   } catch (err) {
     return toResult(err);
   }

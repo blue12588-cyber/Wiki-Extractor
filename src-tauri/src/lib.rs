@@ -15,9 +15,11 @@
 //!   - wiki persistence (Slice 3, wiki_cmd.rs):
 //!       `wiki_write_entry`, `wiki_read_entry`, `wiki_list_entries`,
 //!       `wiki_delete_entry`, `wiki_read_index`, `wiki_write_index`,
-//!       `wiki_read_links`, `wiki_write_links`, `chunks_write`, `chunks_read`.
-//!   - LLM extraction (Slice 3, llm_cmd.rs):
-//!       `llm_config`, `llm_extract`, `llm_classify`, `llm_translate`.
+//!       `wiki_read_links`, `wiki_write_links`, `chunks_write`, `chunks_read`,
+//!       `candidate_review_read`, `candidate_review_write`.
+//!   - LLM extraction/review (Slice 3, llm_cmd.rs):
+//!       `llm_config`, `llm_extract`, `llm_classify`, `llm_translate`,
+//!       `llm_review_claim`.
 //!   - Auto-LLM wiki extraction (Slice 5c, llm_cmd.rs):
 //!       `llm_extract_wiki` (5b prompt -> proxy -> raw text; renderer reuses
 //!       the 5b parse/validate/import pipeline, so the anti-forgery gate binds
@@ -74,10 +76,13 @@ pub fn run() {
             wiki_cmd::wiki_write_links,
             wiki_cmd::chunks_write,
             wiki_cmd::chunks_read,
+            wiki_cmd::candidate_review_read,
+            wiki_cmd::candidate_review_write,
             llm_cmd::llm_config,
             llm_cmd::llm_extract,
             llm_cmd::llm_classify,
             llm_cmd::llm_translate,
+            llm_cmd::llm_review_claim,
             llm_cmd::llm_extract_wiki,
         ])
         .build(tauri::generate_context!())

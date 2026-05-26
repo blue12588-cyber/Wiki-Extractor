@@ -15,10 +15,49 @@
   import AuthStateIndicator from '$lib/components/AuthStateIndicator.svelte';
   import DisclosureBanner from '$lib/components/DisclosureBanner.svelte';
   import ModeToggle from '$lib/components/ModeToggle.svelte';
-  import { authState } from '$lib/auth/store';
+  import { authSnapshot } from '$lib/auth/store';
 
   // Banner stays mounted while auth features are reachable on this machine.
   let auth_reachable = $state(true);
+
+  let authDetail = $derived($authSnapshot.oauthChild.reason ?? null);
+  let proxyRetrying = $state(false);
+  let proxyRetryMessage = $state<string | null>(null);
+
+  type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+  type OAuthChildSnapshot = {
+    state: 'idle' | 'spawning' | 'ready' | 'degraded';
+    port?: number;
+    url?: string;
+    reason?: string;
+  };
+
+  function resolveInvoke(): Invoke | null {
+    if (typeof window === 'undefined') return null;
+    const w = window as unknown as { __TAURI__?: { core?: { invoke?: Invoke } } };
+    return typeof w.__TAURI__?.core?.invoke === 'function' ? w.__TAURI__.core.invoke : null;
+  }
+
+  async function retryProxy() {
+    const invoke = resolveInvoke();
+    if (!invoke) {
+      proxyRetryMessage = '설치된 앱 밖에서는 자동 연결을 재시도할 수 없습니다.';
+      return;
+    }
+    proxyRetrying = true;
+    proxyRetryMessage = '자동 LLM 연결을 다시 준비하는 중입니다. 첫 실행은 다운로드 때문에 시간이 걸릴 수 있습니다.';
+    try {
+      const snap = await invoke<OAuthChildSnapshot>('oauth_proxy_start');
+      proxyRetryMessage =
+        snap.state === 'ready'
+          ? `자동 LLM 연결이 준비되었습니다(${snap.url ?? '로컬 연결'}).`
+          : snap.reason ?? '자동 LLM 연결이 아직 준비되지 않았습니다.';
+    } catch (err) {
+      proxyRetryMessage = `자동 연결 재시도 실패: ${(err as Error).message}`;
+    } finally {
+      proxyRetrying = false;
+    }
+  }
 </script>
 
 <section class="block">
@@ -51,8 +90,21 @@
 
   <div class="state-row">
     <span class="state-label">현재 인증 상태</span>
-    <AuthStateIndicator state={$authState} />
+    <AuthStateIndicator state={$authSnapshot.state} detail={authDetail} />
   </div>
+  {#if $authSnapshot.state === 'degraded'}
+    <p class="proxy-help" role="status">
+      자동 모드 계정은 감지됐지만 로컬 자동 LLM 연결이 준비되지 않았습니다.
+      {#if authDetail}<span>현재 원인: {authDetail}</span>{/if}
+      <span>해결: [자동 연결 재시도] → [다시 검출] → [ChatGPT로 로그인] 재시도 → Node.js/npx 설치 확인 → 앱 재시작 순서로 확인하세요.</span>
+      <button type="button" class="proxy-retry" onclick={retryProxy} disabled={proxyRetrying}>
+        {proxyRetrying ? '자동 연결 재시도 중…' : '자동 연결 재시도'}
+      </button>
+      {#if proxyRetryMessage}
+        <span>{proxyRetryMessage}</span>
+      {/if}
+    </p>
+  {/if}
 
   <ModeToggle />
 
@@ -131,5 +183,37 @@
     font-size: 0.875rem;
     font-weight: 600;
     color: var(--text-secondary);
+  }
+
+  .proxy-help {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    margin: calc(-1 * var(--space-md)) 0 var(--space-md) 0;
+    padding: var(--space-sm) var(--space-md);
+    border-left: 3px solid var(--warn-amber);
+    border-radius: var(--radius-tight);
+    background: var(--surface-sunken);
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .proxy-retry {
+    align-self: flex-start;
+    padding: var(--space-xs) var(--space-md);
+    border: 1px solid var(--warn-amber);
+    border-radius: var(--radius-soft);
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    font-family: var(--heading-family);
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .proxy-retry:disabled {
+    opacity: 0.6;
+    cursor: progress;
   }
 </style>

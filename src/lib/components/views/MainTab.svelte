@@ -15,6 +15,7 @@
   import CandidateList from '$lib/components/CandidateList.svelte';
   import CandidateCardList from '$lib/components/CandidateCardList.svelte';
   import BridgePanel from '$lib/components/BridgePanel.svelte';
+  import BatchBridgePanel from '$lib/components/BatchBridgePanel.svelte';
   import type { TextQualityReport } from '$lib/extract/textQuality';
   import { pipeline } from '$lib/pipeline/store.svelte';
   import {
@@ -27,23 +28,34 @@
     onCandidateDecision,
     openBridge,
     closeBridge,
+    openBatchBridge,
+    closeBatchBridge,
     importBridgeCandidate,
+    importBatchBridgeCandidates,
+    batchBridgePromptInput,
     bridgePromptInput,
+    onFilesSelected,
   } from '$lib/pipeline/actions';
 
   import { autoModeActive } from '$lib/llm/modeStore.svelte';
 
   // Slice 5b — derive the open bridge panel's inputs from the store.
   let bridgeInput = $derived(pipeline.bridgeCandidateId ? bridgePromptInput() : null);
+  let batchBridgeInput = $derived(pipeline.batchBridgeOpen ? batchBridgePromptInput() : null);
   // Slice 5c — the bridge runs in auto mode only when the user has opted in AND
   // codex is available (effective mode). Otherwise it is the pure 5b copy-paste
   // bridge (无损). `autoModeActive` collapses an unavailable selection to offline.
   let autoMode = $derived(autoModeActive());
+  let offlineNeedsCards = $derived(!autoMode && pipeline.candidateCards.length === 0);
 
   let upload_zone: ReturnType<typeof UploadZone> | null = null;
 
   function handle_select(file: File) {
     return onFileSelected(file, upload_zone);
+  }
+
+  function handle_select_many(files: File[]) {
+    return onFilesSelected(files, upload_zone);
   }
 
   function qualityLabel(level: TextQualityReport['level']): string {
@@ -70,9 +82,28 @@
     일반 텍스트, 마크다운, PDF 파일을 올려놓으세요. 해시 기반 원문 식별자가
     <code>data/sources/</code> 아래 하위 폴더가 되며, 업로드 시 청크가 자동 저장됩니다.
   </p>
-  <UploadZone bind:this={upload_zone} onselect={handle_select} />
+  <UploadZone bind:this={upload_zone} onselect={handle_select} onselectmany={handle_select_many} />
   {#if pipeline.chunkStatus}
     <p class="chunk-status" role="status">{pipeline.chunkStatus}</p>
+  {/if}
+  {#if pipeline.sources.length > 0}
+    <div class="source-list" aria-label="올린 자료 목록">
+      <div class="source-list-head">
+        <strong>올린 자료</strong>
+        <span>{pipeline.sources.length}개 · 청크 {pipeline.chunks.length}개</span>
+      </div>
+      <ul>
+        {#each pipeline.sources as source (source.source_id)}
+          <li>
+            <span class="source-name" title={source.filename}>{source.filename}</span>
+            <span class="source-meta">
+              {source.source_kind} · 후보 {source.candidate_count}개 · 청크 {source.chunk_count}개
+              {source.text_quality_level ? ` · 텍스트 ${source.text_quality_level}` : ''}
+            </span>
+          </li>
+        {/each}
+      </ul>
+    </div>
   {/if}
   {#if pipeline.textQuality}
     <div class="ocr-quality" data-level={pipeline.textQuality.level} role="status">
@@ -123,19 +154,24 @@
   <p class="section-lede">
     결정적 추출 결과입니다(원문 그대로, 패러프레이즈 없음). 아래 “위키 생성”은
     자동 모드에서는 근거 검증을 통과한 LLM 후보만 위키 초안으로 가져오고,
-    실패하거나 인증이 없으면 결정적 후보로 위키를 만듭니다.
+    자동 연결이 실패하면 결정적 후보로 오프라인 위키를 만든 뒤 이유를 알려줍니다.
+    번역과 LLM 검토는 위키 탭에서 다시 실행할 수 있습니다.
     생성된 위키는 좌측 “위키” 탭에서 확인·편집할 수 있습니다.
   </p>
-  <CandidateList bundle={pipeline.bundle} busy={pipeline.extracting} />
+  <CandidateList bundle={pipeline.bundle} bundles={pipeline.bundles} busy={pipeline.extracting} />
 
   <div class="build-row">
     <button
       type="button"
       class="btn primary"
       onclick={buildWiki}
-      disabled={!pipeline.bundle || pipeline.busy}
+      disabled={!pipeline.bundle || pipeline.busy || offlineNeedsCards}
     >
-      {#if autoMode && pipeline.autoWikiProgress && pipeline.autoWikiProgress.nextBatch > 0 && pipeline.autoWikiProgress.nextBatch < pipeline.autoWikiProgress.totalBatches}
+      {#if !autoMode && offlineNeedsCards}
+        먼저 아래 후보 추출
+      {:else if !autoMode}
+        선택 후보 위키로 저장
+      {:else if autoMode && pipeline.autoWikiProgress && pipeline.autoWikiProgress.nextBatch > 0 && pipeline.autoWikiProgress.nextBatch < pipeline.autoWikiProgress.totalBatches}
         자동 위키 계속 생성
       {:else}
         위키 생성 (추출 · 분류 · 매핑)
@@ -151,6 +187,17 @@
       </button>
     {/if}
   </div>
+  {#if autoMode && !pipeline.llmCfg.reachable}
+    <p class="notice warn" role="status">
+      자동 LLM 모드가 선택되어 있지만 실제 연결은 아직 준비되지 않았습니다. 이 상태에서는 자동 위키 생성과 번역이 실행되지 않으며,
+      위키 생성은 오프라인 원문 기반 초안으로 진행됩니다. 자동 결과가 필요하면 로그인 탭에서 연결 상태를 먼저 확인하세요.
+    </p>
+  {:else if pipeline.bundle && offlineNeedsCards}
+    <p class="notice muted" role="status">
+      오프라인 모드에서는 먼저 아래 <strong>규칙 기반 후보 추출(오프라인)</strong>을 눌러 후보를 확인한 뒤,
+      필요한 후보만 위키로 저장하세요.
+    </p>
+  {/if}
   {#if pipeline.notice}
     <p class="notice" role="status">{pipeline.notice}</p>
   {/if}
@@ -185,7 +232,16 @@
     busy={pipeline.scoring}
     ondecision={onCandidateDecision}
     oncopyprompt={openBridge}
+    oncopybatch={openBatchBridge}
   />
+
+  {#if batchBridgeInput}
+    <BatchBridgePanel
+      input={batchBridgeInput}
+      onimport={importBatchBridgeCandidates}
+      onclose={closeBatchBridge}
+    />
+  {/if}
 
   {#if bridgeInput}
     <BridgePanel
@@ -225,6 +281,61 @@
     color: var(--success-moss);
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     overflow-wrap: anywhere;
+  }
+
+  .source-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    padding: var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-tight);
+    background: var(--surface-sunken);
+  }
+
+  .source-list-head,
+  .source-list li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-md);
+  }
+
+  .source-list-head strong {
+    font-family: var(--heading-family);
+    font-size: 0.875rem;
+  }
+
+  .source-list-head span,
+  .source-meta {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+
+  .source-list ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+
+  .source-list li {
+    min-width: 0;
+  }
+
+  .source-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8125rem;
+    color: var(--text-primary);
+  }
+
+  .source-meta {
+    flex: 0 0 auto;
   }
 
   .ocr-quality {
@@ -346,6 +457,11 @@
   .notice.muted {
     border-left-color: var(--success-moss);
     color: var(--text-secondary);
+  }
+
+  .notice.warn {
+    border-left-color: var(--warn-amber);
+    color: var(--text-primary);
   }
 
   code {

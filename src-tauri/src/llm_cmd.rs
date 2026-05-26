@@ -202,6 +202,22 @@ NEVER alter, paraphrase, or replace the ORIGINAL text — it is preserved verbat
 Preserve original-language terms (Hebrew/Greek/Latin) inline with transliteration + meaning where helpful.
 Return ONLY JSON: {"translation": "<Korean translation>"}."#;
 
+/// Review one offline-created wiki claim and turn it into a readable Korean
+/// claim + Catholic-terminology translation. The original remains preserved by
+/// the renderer; this command only suggests separate editable fields.
+const REVIEW_CLAIM_SYSTEM_PROMPT: &str = r#"You review one evidence-bearing wiki claim for a Korean academic reader.
+The claim may have been created offline from an English source fragment. Do not invent context beyond the provided original passage.
+Return a concise Korean claim statement, a Catholic-terminology Korean translation of the original passage, and a short review note.
+
+MANDATORY terminology policy for biblical/theological material:
+- Use Catholic Korean terms: 판관기, 탈출기/탈출, 마르코 복음, 마태오 복음, 루카 복음, 주님/하느님, 의화, 은총.
+- Avoid Protestant/non-standard forms: 사사기, 출애굽기/출애굽, 마가복음, 마태복음, 누가복음, 여호와, 칭의/이신칭의, 은혜.
+- Preserve Greek/Hebrew/Latin/source terms when useful.
+
+Do NOT alter the original passage. Do NOT make a broad claim unsupported by the passage.
+Return ONLY JSON:
+{"statement_ko":"...", "translation_ko":"...", "review_note_ko":"...", "recommended_action":"keep|revise|discard", "boundary_note":"..."}."#;
+
 /* ---------------- Responses API plumbing (openai-oauth proxy) ----------------
 
 The openai-oauth proxy (EvanZhouDev) exposes ONLY the OpenAI **Responses API** at
@@ -460,7 +476,7 @@ async fn chat_completion(system: &str, user: String) -> Result<String, LlmError>
     let base = resolve_base_url().ok_or_else(|| {
         LlmError::degraded(
             "no_auth",
-            "OAuth 구독 세션이 준비되지 않았습니다. 보기/편집/저장은 그대로 사용할 수 있습니다.",
+            "자동 LLM 연결이 준비되지 않았습니다. 번역·자동 생성은 건너뛰며 보기/편집/저장은 그대로 사용할 수 있습니다.",
         )
     })?;
     let endpoint = cfg.endpoint_template.replace("{base}", &base);
@@ -600,6 +616,25 @@ pub async fn llm_translate(args: TranslateArgs) -> Result<String, LlmError> {
         args.original_text
     );
     chat_completion(TRANSLATE_SYSTEM_PROMPT, user).await
+}
+
+#[derive(Deserialize)]
+pub struct ReviewClaimArgs {
+    /// Current editable wiki claim statement.
+    pub statement: String,
+    /// The preserved ORIGINAL source text backing the claim.
+    pub original_text: String,
+}
+
+/// Review an offline-created claim and suggest Korean-readable fields. The
+/// renderer decides how to apply the suggestion and keeps original_text intact.
+#[tauri::command]
+pub async fn llm_review_claim(args: ReviewClaimArgs) -> Result<String, LlmError> {
+    let user = format!(
+        "Current claim statement:\n{}\n\nPreserved original passage:\n{}",
+        args.statement, args.original_text
+    );
+    chat_completion(REVIEW_CLAIM_SYSTEM_PROMPT, user).await
 }
 
 /* ---------------- Slice 5c — auto-LLM wiki extraction ---------------- */

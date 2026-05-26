@@ -28,13 +28,14 @@
 
   type Props = {
     state?: AuthIndicatorState;
+    detail?: string | null;
   };
-  let { state = 'unconfigured' as AuthIndicatorState }: Props = $props();
+  let { state = 'unconfigured' as AuthIndicatorState, detail = null }: Props = $props();
 
   const labels: Record<AuthIndicatorState, string> = {
     'unconfigured': '인증 미설정',
     'codex-detected': 'Codex 인증 감지됨',
-    'oauth-child-up': '프록시 준비됨',
+    'oauth-child-up': '자동 LLM 준비됨',
     'degraded': '프록시 응답 저하',
     'dev-fallback-active': '개발용 대체 모드',
   };
@@ -43,14 +44,25 @@
     'unconfigured':
       'Codex 인증 파일을 찾을 수 없습니다. 자동 모드를 쓰려면 Node.js 설치 후 `npm i -g @openai/codex`, `codex login`을 실행하세요. 후보별 복붙 모드는 그대로 사용할 수 있습니다.',
     'codex-detected':
-      'Codex 인증 파일이 있습니다. 프록시가 시작되면 LLM 기능을 사용할 수 있습니다.',
+      'Codex 인증 파일이 있습니다. 자동 LLM 연결이 시작되면 번역·자동 생성 기능을 사용할 수 있습니다.',
     'oauth-child-up':
-      'openai-oauth 자식 프로세스가 http://127.0.0.1:<port>/v1 에서 실행 중입니다.',
+      '자동 LLM 연결이 준비되었습니다. 번역과 자동 위키 생성을 사용할 수 있습니다.',
     'degraded':
-      'openai-oauth 자식 프로세스가 종료되었거나 준비 신호가 감지되지 않았습니다. 재시도 대기 중입니다.',
+      'Codex 로그인은 감지됐지만 자동 LLM 연결 도구가 준비되지 않았습니다. 자동 위키 생성·번역은 실행되지 않으며, 복붙 브릿지와 오프라인 후보 추출은 계속 사용할 수 있습니다.',
     'dev-fallback-active':
       '개발용 대체 플래그가 설정되었거나 Codex 인증 파일이 없습니다. LLM 기능은 스텁(모의)으로 동작합니다.',
   };
+
+  let degradedHelp = $derived([
+    detail ? `원인: ${detail}` : tooltips.degraded,
+    '해결: 1) 로그인 탭의 [자동 연결 재시도]를 누르세요.',
+    '2) 계속 안 되면 [다시 검출]과 [ChatGPT로 로그인]을 다시 진행하세요.',
+    '3) Windows/WSL 중 Codex가 설치된 쪽에 Node.js와 npx가 있어야 합니다.',
+    '4) 첫 실행은 openai-oauth 다운로드 때문에 오래 걸릴 수 있습니다. 방화벽이나 회사망이면 실패할 수 있습니다.',
+    '5) 그래도 안 되면 앱을 재시작한 뒤 다시 시도하세요.',
+  ].join('\n'));
+
+  let tooltip = $derived(state === 'degraded' ? degradedHelp : tooltips[state]);
 </script>
 
 <span
@@ -58,7 +70,7 @@
   data-state={state}
   role="status"
   aria-live="polite"
-  title={tooltips[state]}
+  title={tooltip}
 >
   <span class="shape" aria-hidden="true">
     {#if state === 'unconfigured'}

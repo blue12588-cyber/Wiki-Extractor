@@ -48,6 +48,19 @@ export interface PromptInput {
   schema: string[];
 }
 
+/** Inputs for a top-N batch prompt. */
+export interface BatchPromptInput {
+  /** Top rule-engine candidates selected by the app for one ChatGPT round. */
+  candidates: ScoredCandidate[];
+  /**
+   * Deduplicated chunks backing those candidates. Chunks may span multiple
+   * sources, but each output candidate must cite evidence from one source only.
+   */
+  chunks: Chunk[];
+  /** User outline node titles and/or free-text topic terms. */
+  schema: string[];
+}
+
 /** Inputs for a whole-source automatic extraction prompt. */
 export interface GlobalPromptInput {
   /** Source chunks to expose to the LLM. Emitted verbatim, in document order. */
@@ -113,6 +126,14 @@ const GLOBAL_ROLE_BLOCK = [
   '출력은 아래 [OUTPUT_FORMAT] JSON 형식만 사용하라(코드펜스 ```json 으로 감싸도 된다). 형식 외 다른 텍스트는 출력하지 마라.',
 ].join('\n');
 
+const BATCH_ROLE_BLOCK = [
+  ROLE_BLOCK,
+  '',
+  '이번 입력에는 후보가 여러 개 들어 있다. [CANDIDATES]의 source_id/local_candidate_id는 앱 내부 추적용 참고값이며, 출력 JSON에는 반드시 근거 chunk_id로만 증명하라.',
+  '서로 다른 원서의 근거를 한 후보에 섞지 마라. 한 wiki_candidate의 evidence는 모두 같은 source_id의 청크에서만 고른다.',
+  '후보별로 하나씩 만들 필요는 없다. 재사용성이 가장 높은 것만 골라 최대 8개까지 출력하고, 약한 후보는 생략하라.',
+].join('\n');
+
 /** The OUTPUT_FORMAT exemplar (kept in sync with responseValidator). */
 const OUTPUT_FORMAT = [
   '{',
@@ -156,7 +177,28 @@ function chunkBlock(chunks: Chunk[]): string {
       // Verbatim chunk text — preservation invariant. Indented two spaces so the
       // block is readable; the text itself is NOT mutated.
       const body = c.text.split('\n').map((ln) => `    ${ln}`).join('\n');
-      return [`- chunk_id: ${c.chunk_id}`, `  page: ${page}`, '  text:', body].join('\n');
+      return [`- chunk_id: ${c.chunk_id}`, `  source_id: ${c.source_id}`, `  page: ${page}`, '  text:', body].join('\n');
+    })
+    .join('\n');
+}
+
+function candidateBatchBlock(candidates: ScoredCandidate[]): string {
+  if (candidates.length === 0) return '(후보가 없습니다.)';
+  return candidates
+    .map((scored, index) => {
+      const cand = scored.candidate;
+      const lines = [
+        `- batch_index: ${index + 1}`,
+        `  source_id: ${cand.source_id}`,
+        `  local_candidate_id: ${cand.local_candidate_id}`,
+        `  title: ${cand.title}`,
+        `  type: ${cand.type}`,
+        `  recommended_action: ${scored.recommended_action}`,
+      ];
+      if (scored.target_entry_title) lines.push(`  related_existing_entry: ${scored.target_entry_title}`);
+      if (cand.summary && cand.summary !== cand.title) lines.push(`  summary: ${cand.summary}`);
+      if (cand.evidence_text) lines.push(`  evidence_preview: ${cand.evidence_text.replace(/\s+/g, ' ').trim()}`);
+      return lines.join('\n');
     })
     .join('\n');
 }
@@ -175,6 +217,25 @@ export function buildPrompt(input: PromptInput): string {
   if (input.candidate.target_entry_title) {
     sections.push(`- 관련 기존 항목: ${input.candidate.target_entry_title}`);
   }
+  sections.push('');
+  sections.push('[SCHEMA]');
+  sections.push(schemaBlock(input.schema));
+  sections.push('');
+  sections.push('[CANDIDATE_CHUNKS]');
+  sections.push(chunkBlock(input.chunks));
+  sections.push('');
+  sections.push('[OUTPUT_FORMAT]');
+  sections.push(OUTPUT_FORMAT);
+  return sections.join('\n');
+}
+
+/** Build one copy-paste package for the top N candidate cards. Pure. */
+export function buildBatchPrompt(input: BatchPromptInput): string {
+  const sections: string[] = [];
+  sections.push(BATCH_ROLE_BLOCK);
+  sections.push('');
+  sections.push('[CANDIDATES]');
+  sections.push(candidateBatchBlock(input.candidates));
   sections.push('');
   sections.push('[SCHEMA]');
   sections.push(schemaBlock(input.schema));

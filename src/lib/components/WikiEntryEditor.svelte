@@ -24,9 +24,11 @@
     onsave?: (entry: WikiEntry) => Promise<void> | void;
     /** 한 주장 번역 요청(가톨릭 용어). null 반환 시 degradation. */
     ontranslate?: (claimId: string, original: string) => Promise<void> | void;
+    /** 오프라인 생성 주장을 LLM으로 검토해 주장/번역/메모를 보강한다. */
+    onreview?: (claimId: string, original: string) => Promise<void> | void;
     busy?: boolean;
   };
-  let { entry = $bindable(), outline = null, onsave, ontranslate, busy = false }: Props = $props();
+  let { entry = $bindable(), outline = null, onsave, ontranslate, onreview, busy = false }: Props = $props();
 
   let dirty = $state(false);
   let saved_at = $state<string | null>(null);
@@ -110,14 +112,24 @@
             oninput={mark_dirty}
             placeholder="LLM 번역 또는 직접 입력. 원문은 변경되지 않습니다."
           ></textarea>
-          <button
-            type="button"
-            class="btn small"
-            onclick={() => ontranslate?.(claim.claim_id, claim.original_text)}
-            disabled={busy}
-          >
-            가톨릭 용어로 번역
-          </button>
+          <div class="claim-actions">
+            <button
+              type="button"
+              class="btn small"
+              onclick={() => ontranslate?.(claim.claim_id, claim.original_text)}
+              disabled={busy}
+            >
+              가톨릭 용어로 번역
+            </button>
+            <button
+              type="button"
+              class="btn small"
+              onclick={() => onreview?.(claim.claim_id, claim.original_text)}
+              disabled={busy}
+            >
+              LLM 검토
+            </button>
+          </div>
         </div>
 
         <ClaimAnnotation
@@ -251,6 +263,12 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
+  }
+
+  .claim-actions {
+    display: flex;
+    gap: var(--space-xs);
+    flex-wrap: wrap;
   }
 
   .btn {

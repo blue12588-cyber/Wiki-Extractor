@@ -41,6 +41,11 @@ const SYNONYMS: Record<string, string[]> = {
   kingdom: ['나라', '왕국'],
   passion: ['수난'],
   psalm: ['시편'],
+  parrhesia: ['παρρησία', 'παρρησια', '파레시아', 'boldness', 'frankness', 'free speech'],
+  'παρρησία': ['parrhesia', 'παρρησια', '파레시아', 'boldness', 'frankness', 'free speech'],
+  'παρρησια': ['parrhesia', 'παρρησία', '파레시아', 'boldness', 'frankness', 'free speech'],
+  boldness: ['parrhesia', 'παρρησία', '파레시아', '담대함'],
+  frankness: ['parrhesia', 'παρρησία', '파레시아', '솔직함'],
   // Korean → English back-pointers (so an outline pasted in Korean still hits
   // English source terms).
   해석학: ['hermeneutic', 'hermeneutics'],
@@ -52,6 +57,9 @@ const SYNONYMS: Record<string, string[]> = {
   언약: ['covenant'],
   수난: ['passion'],
   시편: ['psalm'],
+  파레시아: ['parrhesia', 'παρρησία', 'παρρησια', 'boldness', 'frankness', 'free speech'],
+  담대함: ['boldness', 'parrhesia', 'παρρησία'],
+  솔직함: ['frankness', 'parrhesia', 'παρρησία'],
 };
 
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}]+/u;
@@ -66,6 +74,9 @@ export function tokenize(text: string): Set<string> {
   for (const raw of parts) {
     const t = raw.trim();
     if (!t) continue;
+    // Pure numbers (chapter/page-like tokens) create noisy outline matches such
+    // as "10" from "2 Cor 10"; mixed tokens like "1요한" are still kept.
+    if (/^\d+$/.test(t)) continue;
     // Drop 1-char ASCII tokens (noise) but keep 1-char CJK (meaningful).
     if (t.length === 1 && /[a-z0-9]/.test(t)) continue;
     if (STOPWORDS.has(t)) continue;

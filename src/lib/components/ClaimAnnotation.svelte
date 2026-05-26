@@ -73,7 +73,7 @@
         {#if translated_text && translated_text.trim()}
           <p class="ann-text">{translated_text}</p>
         {:else}
-          <p class="ann-text muted">번역이 아직 적용되지 않았습니다(오프라인/미인증). 원문은 아래에 보존되어 있습니다.</p>
+          <p class="ann-text muted">번역이 아직 적용되지 않았습니다. 자동 LLM 연결이 준비되지 않았거나 ChatGPT 브릿지 결과를 아직 가져오지 않은 상태입니다. 원문은 아래에 보존되어 있습니다.</p>
         {/if}
       </div>
 

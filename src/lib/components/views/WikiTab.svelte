@@ -12,7 +12,7 @@
   import WikiEntryEditor from '$lib/components/WikiEntryEditor.svelte';
   import { structuralReasonForCandidate } from '$lib/candidate/structuralFilter';
   import { pipeline } from '$lib/pipeline/store.svelte';
-  import { onSaveEntry, onTranslate } from '$lib/pipeline/actions';
+  import { onReviewClaim, onSaveEntry, onTranslate } from '$lib/pipeline/actions';
 
   let showStructural = $state(false);
 
@@ -61,6 +61,9 @@
       {hiddenStructuralCount}개는 기본 위키 목록에서 숨겼습니다. 저장 파일은 삭제하지 않았습니다.
     </p>
   {/if}
+  {#if pipeline.notice}
+    <p class="notice" role="status">{pipeline.notice}</p>
+  {/if}
   {#if pipeline.entries.length === 0}
     <div class="wiki-empty" role="status">
       아직 위키 항목이 없습니다. “메인” 탭에서 원문을 올리고 “위키 생성”을 누르세요.
@@ -78,6 +81,7 @@
           busy={pipeline.busy}
           onsave={onSaveEntry}
           ontranslate={(cid, orig) => onTranslate(pipeline.entries[row.index], cid, orig)}
+          onreview={(cid, orig) => onReviewClaim(pipeline.entries[row.index], cid, orig)}
         />
       {/each}
     </div>
@@ -136,6 +140,17 @@
     background: var(--surface-sunken);
     color: var(--text-secondary);
     font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  .notice {
+    margin: 0;
+    padding: var(--space-sm) var(--space-md);
+    border-left: 3px solid var(--accent-oxblood);
+    border-radius: var(--radius-tight);
+    background: var(--surface-sunken);
+    color: var(--text-primary);
+    font-size: 0.875rem;
     line-height: 1.5;
   }
 

@@ -19,12 +19,13 @@
   type Props = {
     cards: CandidateCardModel[];
     busy?: boolean;
-    ondecision?: (candidateId: string, next: CandidateDecision) => void;
+    ondecision?: (sourceId: string, candidateId: string, next: CandidateDecision) => void;
     /** Slice 5b — open the ChatGPT copy-paste bridge for one candidate. */
-    oncopyprompt?: (candidateId: string) => void;
+    oncopyprompt?: (sourceId: string, candidateId: string) => void;
+    oncopybatch?: () => void;
   };
 
-  let { cards, busy = false, ondecision, oncopyprompt }: Props = $props();
+  let { cards, busy = false, ondecision, oncopyprompt, oncopybatch }: Props = $props();
 
   const ACTION_ORDER: RecommendedAction[] = ['create_new', 'update_existing', 'link_only', 'ignore'];
 
@@ -38,6 +39,12 @@
       .map((a) => ({ action: a, count: counts.get(a) ?? 0 }))
       .filter((t) => t.count > 0);
   });
+
+  let batchable_count = $derived(cards.filter((c) =>
+    c.scored.recommended_action !== 'ignore' &&
+    c.decision !== 'held' &&
+    c.decision !== 'discarded',
+  ).length);
 </script>
 
 <section class="card-list" aria-label="규칙 기반 추출 후보" aria-busy={busy}>
@@ -61,15 +68,31 @@
           <span class="tally-item">{ACTION_LABEL[t.action]} {t.count}</span>
         {/each}
       </p>
+      <button
+        type="button"
+        class="btn batch"
+        onclick={() => oncopybatch?.()}
+        disabled={batchable_count === 0}
+        title="상위 후보를 하나의 ChatGPT 프롬프트로 묶습니다"
+      >
+        상위 후보 일괄 ChatGPT 브릿지
+      </button>
     </header>
 
     <ol class="cards">
-      {#each cards as model (model.scored.candidate.local_candidate_id)}
+      {#each cards as model (`${model.scored.candidate.source_id}:${model.scored.candidate.local_candidate_id}`)}
         <CandidateCard
           scored={model.scored}
           decision={model.decision}
-          ondecision={(next) => ondecision?.(model.scored.candidate.local_candidate_id, next)}
-          oncopyprompt={() => oncopyprompt?.(model.scored.candidate.local_candidate_id)}
+          ondecision={(next) => ondecision?.(
+            model.scored.candidate.source_id,
+            model.scored.candidate.local_candidate_id,
+            next,
+          )}
+          oncopyprompt={() => oncopyprompt?.(
+            model.scored.candidate.source_id,
+            model.scored.candidate.local_candidate_id,
+          )}
         />
       {/each}
     </ol>
@@ -122,6 +145,23 @@
     padding: 1px var(--space-sm);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-pill);
+  }
+  .btn {
+    font-family: var(--heading-family);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: var(--space-xs) var(--space-md);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--text-secondary); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .batch {
+    margin-left: auto;
+    white-space: normal;
   }
 
   .cards {

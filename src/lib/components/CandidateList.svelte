@@ -29,12 +29,13 @@
   import type { CandidateBundle, CandidateType } from '$lib/extract/candidateExtractor';
 
   type Props = {
-    bundle: CandidateBundle | null;
+    bundle?: CandidateBundle | null;
+    bundles?: CandidateBundle[];
     /** True while an extraction is running (shows a busy hairline). */
     busy?: boolean;
   };
 
-  let { bundle, busy = false }: Props = $props();
+  let { bundle = null, bundles = [], busy = false }: Props = $props();
 
   // Short human label per type. Domain-neutral (biblical_text -> religious_text
   // generalization is reflected here).
@@ -61,18 +62,19 @@
     other: '○',
   };
 
-  let item_count = $derived(bundle?.candidate_items.length ?? 0);
+  let visibleBundles = $derived(bundles.length > 0 ? bundles : (bundle ? [bundle] : []));
+  let item_count = $derived(visibleBundles.reduce((sum, b) => sum + b.candidate_items.length, 0));
 
   // Distinct type tally for the summary line, in stable first-seen order.
-  let type_tally = $derived.by(() => {
+  function typeTally(bundle: CandidateBundle): Array<{ type: CandidateType; count: number }> {
     const order: CandidateType[] = [];
     const counts = new Map<CandidateType, number>();
-    for (const it of bundle?.candidate_items ?? []) {
+    for (const it of bundle.candidate_items) {
       if (!counts.has(it.type)) order.push(it.type);
       counts.set(it.type, (counts.get(it.type) ?? 0) + 1);
     }
     return order.map((t) => ({ type: t, count: counts.get(t) ?? 0 }));
-  });
+  }
 
   function formatEvidenceRef(ref: string): string {
     const pageLine = ref.match(/#page-(\d+)-line-(\d+)/);
@@ -90,7 +92,7 @@
     <div class="busy-hairline" aria-hidden="true"></div>
   {/if}
 
-  {#if !bundle}
+  {#if visibleBundles.length === 0}
 	    <div class="empty" role="status">
 	      <p class="empty-title">아직 추출한 원문이 없습니다</p>
 	      <p class="empty-hint">
@@ -102,17 +104,18 @@
 	    <div class="empty" role="status">
 	      <p class="empty-title">추출 후보가 없습니다</p>
 	      <p class="empty-hint">
-	        원문 <code>{bundle.source_id}</code> ({bundle.source_kind})은 읽었지만,
+	        원문 {visibleBundles.length}개는 읽었지만,
 	        위키 후보로 삼을 만한 개념이나 인용을 찾지 못했습니다.
 	      </p>
 	    </div>
 	  {:else}
+      {#each visibleBundles as bundle (bundle.source_id)}
 	    <header class="group-head">
 	      <h2 class="group-title"><code>{bundle.source_id}</code>에서 추출</h2>
 	      <p class="group-meta">
 	        <span class="kind-tag">{bundle.source_kind}</span>
-	        <span class="count">후보 {item_count}개</span>
-	        {#each type_tally as t (t.type)}
+	        <span class="count">후보 {bundle.candidate_items.length}개</span>
+	        {#each typeTally(bundle) as t (t.type)}
           <span class="tally" title={TYPE_LABEL[t.type]}>
             <span class="tally-glyph" aria-hidden="true">{TYPE_GLYPH[t.type]}</span>
             {TYPE_LABEL[t.type]} ×{t.count}
@@ -160,6 +163,7 @@
         </li>
       {/each}
     </ol>
+      {/each}
   {/if}
 </section>
 

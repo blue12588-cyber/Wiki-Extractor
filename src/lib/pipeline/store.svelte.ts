@@ -20,6 +20,7 @@ import type { ParsedOutline } from '$lib/outline/outlineParser';
 import type { WikiEntry } from '$lib/wiki/wikiTypes';
 import type { LlmConfigSnapshot } from '$lib/llm/llmClient';
 import type { CandidateCardModel } from '$lib/candidate/candidateEngine';
+import type { CandidateReviewState } from '$lib/candidate/reviewState';
 import type { AutoLlmBatchTrace } from '$lib/diagnostics/extractionReport';
 
 export type TabId = 'main' | 'wiki' | 'login' | 'feedback';
@@ -34,13 +35,24 @@ export interface AutoWikiProgress {
   updated_at: string;
 }
 
+export interface SourceSummary {
+  source_id: string;
+  filename: string;
+  source_kind: CandidateBundle['source_kind'];
+  candidate_count: number;
+  chunk_count: number;
+  text_quality_level: TextQualityReport['level'] | null;
+}
+
 /**
  * One reactive object exported as a singleton. Components read/write fields on
  * `pipeline.*`; Svelte 5 deep reactivity propagates the changes across views.
  */
 function createPipeline() {
   let bundle = $state<CandidateBundle | null>(null);
+  let bundles = $state<CandidateBundle[]>([]);
   let chunks = $state<Chunk[]>([]);
+  let sources = $state<SourceSummary[]>([]);
   let chunkStatus = $state<string | null>(null);
   let textQuality = $state<TextQualityReport | null>(null);
   let extracting = $state(false);
@@ -50,6 +62,7 @@ function createPipeline() {
   let entries = $state<WikiEntry[]>([]);
   /** Slice 5a — rule-engine candidate cards (score hidden in UI). */
   let candidateCards = $state<CandidateCardModel[]>([]);
+  let candidateReviewState = $state<CandidateReviewState>({});
   let scoring = $state(false);
   let llmCfg = $state<LlmConfigSnapshot>({
     model: 'gpt-5.4',
@@ -67,14 +80,19 @@ function createPipeline() {
    * LLM; this only tracks which candidate's prompt is shown for copy-paste.
    */
   let bridgeCandidateId = $state<string | null>(null);
+  let batchBridgeOpen = $state(false);
   let autoWikiProgress = $state<AutoWikiProgress | null>(null);
   let autoLlmTraces = $state<AutoLlmBatchTrace[]>([]);
 
   return {
     get bundle() { return bundle; },
     set bundle(v) { bundle = v; },
+    get bundles() { return bundles; },
+    set bundles(v) { bundles = v; },
     get chunks() { return chunks; },
     set chunks(v) { chunks = v; },
+    get sources() { return sources; },
+    set sources(v) { sources = v; },
     get chunkStatus() { return chunkStatus; },
     set chunkStatus(v) { chunkStatus = v; },
     get textQuality() { return textQuality; },
@@ -89,6 +107,8 @@ function createPipeline() {
     set entries(v) { entries = v; },
     get candidateCards() { return candidateCards; },
     set candidateCards(v) { candidateCards = v; },
+    get candidateReviewState() { return candidateReviewState; },
+    set candidateReviewState(v) { candidateReviewState = v; },
     get scoring() { return scoring; },
     set scoring(v) { scoring = v; },
     get llmCfg() { return llmCfg; },
@@ -101,6 +121,8 @@ function createPipeline() {
     set bootstrapped(v) { bootstrapped = v; },
     get bridgeCandidateId() { return bridgeCandidateId; },
     set bridgeCandidateId(v) { bridgeCandidateId = v; },
+    get batchBridgeOpen() { return batchBridgeOpen; },
+    set batchBridgeOpen(v) { batchBridgeOpen = v; },
     get autoWikiProgress() { return autoWikiProgress; },
     set autoWikiProgress(v) { autoWikiProgress = v; },
     get autoLlmTraces() { return autoLlmTraces; },

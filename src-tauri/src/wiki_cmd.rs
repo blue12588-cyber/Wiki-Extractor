@@ -10,6 +10,7 @@
 //!   wiki/<entry_id>.md   — human-readable, AI-readable, frontmatter + body
 //!   wiki/index.json      — array of entry index records
 //!   wiki/links.json      — array of relation records
+//!   candidates/review_state.json — user decisions for source-local candidates
 //!   sources/<id>/chunks.jsonl  — written by chunk_cmd (AC-CHUNK)
 //!
 //! Every command in this module is FILE-SYSTEM ONLY — no network, no LLM, no
@@ -53,6 +54,10 @@ fn wiki_dir(root: &Path) -> PathBuf {
 
 fn sources_dir(root: &Path) -> PathBuf {
     root.join("sources")
+}
+
+fn candidates_dir(root: &Path) -> PathBuf {
+    root.join("candidates")
 }
 
 fn assert_under(root_sub: &Path, target: &Path) -> Result<(), WikiError> {
@@ -336,6 +341,43 @@ fn chunks_read_at(root: &Path, source_id: String) -> Result<String, WikiError> {
     fs::read_to_string(&path).map_err(|e| WikiError::of("io", format!("read failed: {e}")))
 }
 
+/* ---------------- Candidate review persistence ---------------- */
+
+/// Read persisted review decisions for source-local candidates. Returns "{}"
+/// when absent so the renderer can always parse a valid empty object.
+#[tauri::command]
+pub fn candidate_review_read() -> Result<String, WikiError> {
+    let root = resolve_root()?;
+    candidate_review_read_at(&root)
+}
+
+fn candidate_review_read_at(root: &Path) -> Result<String, WikiError> {
+    let path = candidates_dir(root).join("review_state.json");
+    if !path.is_file() {
+        return Ok("{}".to_string());
+    }
+    fs::read_to_string(&path).map_err(|e| WikiError::of("io", format!("read failed: {e}")))
+}
+
+/// Persist user review decisions under data/candidates/review_state.json.
+#[tauri::command]
+pub fn candidate_review_write(json: String) -> Result<String, WikiError> {
+    let root = resolve_root()?;
+    candidate_review_write_at(&root, json)
+}
+
+fn candidate_review_write_at(root: &Path, json: String) -> Result<String, WikiError> {
+    serde_json::from_str::<serde_json::Value>(&json)
+        .map_err(|e| WikiError::of("bad_json", format!("payload is not valid JSON: {e}")))?;
+    let dir = candidates_dir(root);
+    fs::create_dir_all(&dir).map_err(|e| WikiError::of("io", format!("mkdir failed: {e}")))?;
+    let dest = dir.join("review_state.json");
+    assert_under(&dir, &dest)?;
+    fs::write(&dest, json.as_bytes())
+        .map_err(|e| WikiError::of("io", format!("write failed: {e}")))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,8 +439,19 @@ mod tests {
         let cr = chunks_read_at(&tmp, "abc123".to_string()).expect("chunks read");
         assert!(cr.contains("\"chunk_id\":\"x\""));
 
+        // Candidate review state persists outside wiki/, under data/candidates/.
+        let review_path = candidate_review_write_at(
+            &tmp,
+            "{\"src\\u0000cand\":{\"source_id\":\"src\",\"local_candidate_id\":\"cand\",\"decision\":\"approved\",\"updated_at\":\"2026-05-26T00:00:00.000Z\"}}".to_string(),
+        )
+        .expect("candidate review write");
+        assert!(review_path.contains("candidates"));
+        let review = candidate_review_read_at(&tmp).expect("candidate review read");
+        assert!(review.contains("\"decision\":\"approved\""));
+
         // bad json is rejected (store integrity).
         assert!(write_json_file_at(&tmp, "index.json", "{not json".to_string()).is_err());
+        assert!(candidate_review_write_at(&tmp, "{not json".to_string()).is_err());
 
         let _ = fs::remove_dir_all(&tmp);
     }

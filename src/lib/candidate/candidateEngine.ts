@@ -18,7 +18,7 @@ import type { ParsedOutline } from '../outline/outlineParser';
 import type { WikiEntry } from '../wiki/wikiTypes';
 import { scoreCandidates, type ScoredCandidate } from './scoringEngine';
 
-/** Per-candidate user decision (UI state). Persisted only in memory for 5a. */
+/** Per-candidate user decision (UI state, persisted by the pipeline under data/candidates/). */
 export type CandidateDecision = 'pending' | 'approved' | 'held' | 'discarded';
 
 export interface CandidateCardModel {

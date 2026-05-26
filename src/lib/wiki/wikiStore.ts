@@ -15,6 +15,7 @@
  */
 
 import { entryToMarkdown, markdownToEntry } from './wikiMarkdown';
+import type { CandidateReviewState } from '$lib/candidate/reviewState';
 import type { WikiEntry, WikiIndexRecord, WikiLink } from './wikiTypes';
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -33,6 +34,7 @@ function resolveInvoke(): Invoke | null {
 const LS_PREFIX = 'llmwiki:';
 const LS_INDEX = `${LS_PREFIX}index.json`;
 const LS_LINKS = `${LS_PREFIX}links.json`;
+const LS_CANDIDATE_REVIEW = `${LS_PREFIX}candidate_review_state.json`;
 const lsEntry = (id: string) => `${LS_PREFIX}entry:${id}`;
 
 function lsGet(key: string, fallback: string): string {
@@ -210,4 +212,29 @@ export async function readChunksJsonl(source_id: string): Promise<string> {
     return await invoke<string>('chunks_read', { sourceId: source_id });
   }
   return lsGet(`${LS_PREFIX}chunks:${source_id}`, '');
+}
+
+/* ---------------- Candidate review persistence ---------------- */
+
+export async function readCandidateReviewState(): Promise<CandidateReviewState> {
+  const invoke = resolveInvoke();
+  const raw = invoke ? await invoke<string>('candidate_review_read') : lsGet(LS_CANDIDATE_REVIEW, '{}');
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as CandidateReviewState)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function writeCandidateReviewState(state: CandidateReviewState): Promise<void> {
+  const json = JSON.stringify(state, null, 2);
+  const invoke = resolveInvoke();
+  if (invoke) {
+    await invoke<string>('candidate_review_write', { json });
+    return;
+  }
+  lsSet(LS_CANDIDATE_REVIEW, json);
 }

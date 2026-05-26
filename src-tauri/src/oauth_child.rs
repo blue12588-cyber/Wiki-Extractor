@@ -114,6 +114,10 @@ static CHILD_STATUS: Lazy<Mutex<ChildStatus>> = Lazy::new(|| Mutex::new(ChildSta
 /// app exit reaps the child even if `kill_oauth_child` is not called.
 static CHILD_HANDLE: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
 
+/// Recent stdout/stderr lines from the latest proxy spawn. Kept only to explain
+/// a degraded state to the user when the child never prints a ready URL.
+static CHILD_RECENT_OUTPUT: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
 /// Windows-only owner for the Job Object assigned to the app-spawned proxy
 /// process tree. Reused/cached proxies are intentionally never assigned here:
 /// the app only kills what it spawned in this session.
@@ -138,6 +142,8 @@ pub struct OAuthChild {
 // ceiling only matters on the very first auto-mode run.
 const READY_TIMEOUT_MS: u64 = 60_000;
 const PROXY_HEALTH_TIMEOUT_MS: u64 = 800;
+const RECENT_OUTPUT_LIMIT: usize = 8;
+const RECENT_LINE_CHARS: usize = 220;
 
 /// Windows `CREATE_NO_WINDOW` (0x0800_0000): the proxy is a long-running child;
 /// without this flag `cmd /C npx …` pops a visible console window that lingers
@@ -257,6 +263,37 @@ fn already_ready() -> Option<(u16, String)> {
         }
     }
     None
+}
+
+fn reset_recent_output() {
+    if let Ok(mut lines) = CHILD_RECENT_OUTPUT.lock() {
+        lines.clear();
+    }
+}
+
+fn record_child_line(line: &str) {
+    let clean: String = line
+        .chars()
+        .filter(|ch| !ch.is_control() || *ch == '\t')
+        .take(RECENT_LINE_CHARS)
+        .collect();
+    if clean.trim().is_empty() {
+        return;
+    }
+    if let Ok(mut lines) = CHILD_RECENT_OUTPUT.lock() {
+        lines.push(clean);
+        let overflow = lines.len().saturating_sub(RECENT_OUTPUT_LIMIT);
+        if overflow > 0 {
+            lines.drain(0..overflow);
+        }
+    }
+}
+
+fn recent_output_summary() -> String {
+    CHILD_RECENT_OUTPUT
+        .lock()
+        .map(|lines| lines.join(" / "))
+        .unwrap_or_default()
 }
 
 fn proxy_cache_path() -> PathBuf {
@@ -520,6 +557,7 @@ pub async fn spawn_oauth_child(
     }
 
     set_status(ChildStatus::Spawning);
+    reset_recent_output();
     let port = port_hint.unwrap_or(0);
 
     // Branch the spawn on the detected origin (Slice 9). Fixed-literal args.
@@ -552,9 +590,9 @@ pub async fn spawn_oauth_child(
         // attributed to WSL/wsl.exe so the user knows the fallback was attempted;
         // both reasons reassure that copy-paste keeps working (AC-GRACEFUL).
         let reason = if origin == CodexOrigin::Wsl {
-            format!("WSL의 openai-oauth 프록시를 시작할 수 없습니다(wsl.exe/WSL 내 npx·Node 확인). 복붙 모드로 전환합니다: {e}")
+            format!("WSL의 자동 LLM 연결 도구를 시작할 수 없습니다(wsl.exe/WSL 내 npx·Node 확인). 복붙 브릿지를 사용하세요: {e}")
         } else {
-            format!("openai-oauth 자식 프로세스를 시작할 수 없습니다(npx/Node 확인). 복붙 모드로 전환합니다: {e}")
+            format!("자동 LLM 연결 도구를 시작할 수 없습니다(npx/Node 확인). 복붙 브릿지를 사용하세요: {e}")
         };
         set_status(ChildStatus::Degraded { reason: reason.clone() });
         OAuthChildError::SpawnFailed(reason)
@@ -587,8 +625,14 @@ pub async fn spawn_oauth_child(
         status = child.wait() => {
             // Child exited before any ready line: degrade.
             let code = status.ok().and_then(|s| s.code());
+            let recent = recent_output_summary();
+            let recent = if recent.is_empty() {
+                String::new()
+            } else {
+                format!(" 최근 출력: {recent}")
+            };
             let reason = format!(
-                "openai-oauth 자식이 준비 전에 종료되었습니다(code={code:?}). 복붙 모드로 전환합니다."
+                "자동 LLM 연결 도구가 준비 전에 종료되었습니다(code={code:?}). 복붙 브릿지를 사용하세요.{recent}"
             );
             set_status(ChildStatus::Degraded { reason: reason.clone() });
             return Err(OAuthChildError::EarlyExit(reason));
@@ -619,8 +663,16 @@ pub async fn spawn_oauth_child(
         None => {
             // No ready line within the window → grammar mismatch stop_condition.
             let _ = child.kill().await;
+            let recent = recent_output_summary();
+            let recent = if recent.is_empty() {
+                String::new()
+            } else {
+                format!(" 최근 출력: {recent}")
+            };
             set_status(ChildStatus::Degraded {
-                reason: "ready URL(http://127.0.0.1:<port>/v1)을 시간 내에 받지 못했습니다. 복붙 모드로 전환합니다.".into(),
+                reason: format!(
+                    "자동 LLM 연결 준비 신호를 시간 내에 받지 못했습니다. 복붙 브릿지를 사용하세요.{recent}"
+                ),
             });
             Err(OAuthChildError::ReadyLineGrammarMismatch)
         }
@@ -655,6 +707,7 @@ async fn scan_for_ready(
             line = next_out => {
                 match line {
                     Some(text) => {
+                        record_child_line(&text);
                         if let Some(parsed) = parse_ready_line(&text) {
                             return Some(parsed);
                         }
@@ -671,6 +724,7 @@ async fn scan_for_ready(
             line = next_err => {
                 match line {
                     Some(text) => {
+                        record_child_line(&text);
                         if let Some(parsed) = parse_ready_line(&text) {
                             return Some(parsed);
                         }
