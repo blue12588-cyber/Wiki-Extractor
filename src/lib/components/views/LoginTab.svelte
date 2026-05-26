@@ -63,28 +63,26 @@
 <section class="block">
   <h2 class="section-title">로그인 · 인증 상태</h2>
   <p class="section-lede">
-    이 앱은 기본적으로 <strong>복붙 모드</strong>(ChatGPT 직접 호출 없음)로 동작하며,
-    누구나 인증 없이 위키 후보를 정리할 수 있습니다. codex CLI를 직접 설치·로그인한
-    고급 사용자는 아래에서 <strong>자동 LLM 모드</strong>를 켜서 추출을 자동화할 수
-    있습니다. 법적·보안 고지를 반드시 읽어 주세요. (피드백 보내기는 로그인 없이도
-    사용할 수 있습니다.)
+    <strong>복붙 모드</strong>는 로그인 없이 바로 쓸 수 있습니다. <strong>자동 LLM 모드</strong>만
+    Codex CLI 로그인 상태가 필요합니다. Codex 앱 설치는 필수가 아니며, PowerShell에서
+    <code>codex login status</code>가 정상이어야 합니다.
   </p>
 
   <div class="login-summary" role="note" aria-label="자동 모드 인증 요약">
     <section>
       <span class="summary-kicker">기본</span>
-      <strong>설치 없이 복붙 모드</strong>
-      <p>Codex가 없어도 원서 넣기, 후보 추출, 위키 검토·저장은 계속 됩니다.</p>
+      <strong>복붙 모드는 바로 사용</strong>
+      <p>원서 넣기, 후보 추출, 위키 검토·저장은 Codex 없이도 됩니다.</p>
     </section>
     <section>
-      <span class="summary-kicker">선택</span>
-      <strong>자동 모드는 Codex 필요</strong>
-      <p>Codex CLI 설치는 사용자가 직접 합니다. 앱은 자동 설치하지 않습니다.</p>
+      <span class="summary-kicker">자동</span>
+      <strong>CLI 로그인 확인 필요</strong>
+      <p>PowerShell에서 <code>codex --version</code>, <code>codex login status</code>를 먼저 확인하세요.</p>
     </section>
     <section>
-      <span class="summary-kicker">보안</span>
-      <strong>각자 자기 계정으로 로그인</strong>
-      <p>앱은 아이디·비밀번호를 받지 않고, 인증 파일을 만들거나 배포하지 않습니다.</p>
+      <span class="summary-kicker">막힐 때</span>
+      <strong>상태 확인 후 재로그인</strong>
+      <p>로그인이 안 됐으면 <code>codex login</code>, 브라우저가 안 열리면 <code>codex login --device-auth</code>.</p>
     </section>
   </div>
 
@@ -94,9 +92,10 @@
   </div>
   {#if $authSnapshot.state === 'degraded'}
     <p class="proxy-help" role="status">
-      자동 모드 계정은 감지됐지만 로컬 자동 LLM 연결이 준비되지 않았습니다.
+      Codex 로그인은 확인됐지만 자동 연결 도구가 준비되지 않았습니다.
       {#if authDetail}<span>현재 원인: {authDetail}</span>{/if}
-      <span>해결: [자동 연결 재시도] → [다시 검출] → [ChatGPT로 로그인] 재시도 → Node.js/npx 설치 확인 → 앱 재시작 순서로 확인하세요.</span>
+      <span>먼저 [자동 연결 재시도]를 누르세요. 계속 안 되면 PowerShell에서 <code>codex login status</code> 확인 후 [다시 검출]을 누릅니다.</span>
+      <span>로그인은 정상인데도 실패하면 Node.js/npx, 방화벽, 앱 재시작을 확인하세요. 복붙 모드는 계속 사용할 수 있습니다.</span>
       <button type="button" class="proxy-retry" onclick={retryProxy} disabled={proxyRetrying}>
         {proxyRetrying ? '자동 연결 재시도 중…' : '자동 연결 재시도'}
       </button>

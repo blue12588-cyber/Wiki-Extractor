@@ -80,7 +80,7 @@
       llmCfg: pipeline.llmCfg,
       autoWikiProgress: pipeline.autoWikiProgress,
       autoLlmTraces: pipeline.autoLlmTraces,
-      includeAdvancedDebug: true,
+      includeAdvancedDebug: false,
     });
   }
 
@@ -196,22 +196,23 @@
           type="checkbox"
           bind:checked={include_report}
         />
-        <span>추출 진단 리포트 포함</span>
+        <span>요약 진단 포함</span>
       </label>
       <p class="report-note">
         {#if has_report_context}
-          기본으로 체크되어 있으며, 체크되어 있으면 추출 진단 리포트가 함께 전송됩니다:
+          기본으로 체크되어 있으며, 체크되어 있으면 요약 진단이 함께 전송됩니다:
           {report_summary}. 후보별 제목·유형·목차 매핑·근거 위치·짧은 문맥·채택/차단
-          판정과 LLM 파싱 실패 사유를 보냅니다.
+          판정과 LLM 파싱 실패 사유를 대표 항목 중심으로 보냅니다.
         {:else}
-          기본으로 체크되어 있으며, 체크되어 있으면 추출 진단 리포트가 함께 전송됩니다.
-          아직 업로드/추출 이력이 없으면 현재 앱 상태와 빈 추출 이력만 들어갑니다.
+          기본으로 체크되어 있으며, 체크되어 있으면 현재 앱 상태와 빈 추출 이력 요약만
+          함께 전송됩니다.
         {/if}
-        로컬 전체 경로, API 키, OAuth 토큰, auth.json 내용, 원본 파일명은 포함하지 않습니다.
+        무료 피드백 전송을 위해 전체 로그 대신 요약본만 보내며, 사용자가 쓴 내용은
+        요약하지 않습니다. 로컬 전체 경로, API 키, OAuth 토큰, auth.json 내용, 원본 파일명은
+        포함하지 않습니다.
       </p>
       <p class="report-note">
-        포함 시 raw LLM 응답, 프롬프트 버전, 배치 번호, 일부 원문 청크 발췌까지 함께
-        들어갑니다. 체크를 끄면 진단 리포트 전체를 보내지 않습니다.
+        체크를 끄면 요약 진단도 보내지 않고, 피드백 내용만 전송합니다.
       </p>
     </div>
 

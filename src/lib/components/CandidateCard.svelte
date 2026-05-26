@@ -30,12 +30,13 @@
   type Props = {
     scored: ScoredCandidate;
     decision: CandidateDecision;
+    activeBridge?: boolean;
     ondecision?: (next: CandidateDecision) => void;
     /** Opens the 5b ChatGPT copy-paste bridge. */
     oncopyprompt?: () => void;
   };
 
-  let { scored, decision, ondecision, oncopyprompt }: Props = $props();
+  let { scored, decision, activeBridge = false, ondecision, oncopyprompt }: Props = $props();
 
   // Shape glyph per action — disambiguates without relying on hue.
   const ACTION_GLYPH: Record<RecommendedAction, string> = {
@@ -75,7 +76,13 @@
   }
 </script>
 
-<li class="card" data-action={action} aria-label={`후보: ${cand.title}`}>
+<li
+  class="card"
+  class:bridge-active={activeBridge}
+  data-action={action}
+  aria-current={activeBridge ? 'true' : undefined}
+  aria-label={`후보: ${cand.title}`}
+>
   <div class="card-head">
     <span class="action-chip chip-{action}">
       <span class="glyph" aria-hidden="true">{ACTION_GLYPH[action]}</span>
@@ -87,6 +94,11 @@
   </div>
 
   <h3 class="title">{cand.title}</h3>
+
+  <div class="row claim-row">
+    <span class="row-key">[주요주장]</span>
+    <p class="claim-text">{cand.summary || cand.title}</p>
+  </div>
 
   {#if (action === 'update_existing' || action === 'link_only') && scored.target_entry_title}
     <p class="row target">
@@ -127,6 +139,11 @@
         <span class="loc muted">근거 위치 없음</span>
       {/if}
     </p>
+  </div>
+
+  <div class="row evidence-row">
+    <span class="row-key">[본문근거]</span>
+    <blockquote>{cand.evidence_text}</blockquote>
   </div>
 
   {#if boundary.length}
@@ -197,6 +214,10 @@
   .card[data-action='update_existing'] { border-left-color: var(--warn-amber); }
   .card[data-action='link_only'] { border-left-color: var(--success-moss); }
   .card[data-action='ignore'] { border-left-color: var(--border-subtle); opacity: 0.72; }
+  .card.bridge-active {
+    border-color: var(--accent-oxblood);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-oxblood) 20%, transparent);
+  }
 
   .card-head {
     display: flex;
@@ -253,6 +274,26 @@
     gap: 2px;
   }
   .row.target { flex-direction: row; align-items: baseline; gap: var(--space-sm); }
+
+  .claim-text {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.9375rem;
+    line-height: 1.45;
+  }
+
+  .evidence-row blockquote {
+    margin: 0;
+    max-height: 8rem;
+    overflow: auto;
+    padding: var(--space-sm) var(--space-md);
+    border-left: 3px solid var(--border-subtle);
+    border-radius: var(--radius-tight);
+    background: var(--surface-sunken);
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
 
   .row-key {
     font-family: var(--heading-family);

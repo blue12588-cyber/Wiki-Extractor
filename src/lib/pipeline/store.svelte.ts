@@ -22,6 +22,7 @@ import type { LlmConfigSnapshot } from '$lib/llm/llmClient';
 import type { CandidateCardModel } from '$lib/candidate/candidateEngine';
 import type { CandidateReviewState } from '$lib/candidate/reviewState';
 import type { AutoLlmBatchTrace } from '$lib/diagnostics/extractionReport';
+import type { BibliographicMetadata } from '$lib/source/bibliography';
 
 export type TabId = 'main' | 'wiki' | 'login' | 'feedback';
 
@@ -38,6 +39,7 @@ export interface AutoWikiProgress {
 export interface SourceSummary {
   source_id: string;
   filename: string;
+  bibliography: BibliographicMetadata;
   source_kind: CandidateBundle['source_kind'];
   candidate_count: number;
   chunk_count: number;

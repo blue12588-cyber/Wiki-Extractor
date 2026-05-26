@@ -207,6 +207,10 @@ fn sha256_prefix(bytes: &[u8]) -> String {
     hex[..SOURCE_ID_PREFIX_LEN].to_string()
 }
 
+fn is_valid_source_id(source_id: &str) -> bool {
+    source_id.len() == SOURCE_ID_PREFIX_LEN && source_id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /* ---------------- Tauri command ---------------- */
 
 /// Shared ingest body: verify magic bytes, hash → source_id, write the bytes
@@ -285,6 +289,21 @@ pub fn upload_bytes(filename: String, bytes: Vec<u8>) -> Result<UploadResult, Up
     ingest_bytes(&root, &filename, &bytes)
 }
 
+#[tauri::command]
+pub fn source_exists(source_id: String) -> Result<bool, UploadError> {
+    if !is_valid_source_id(&source_id) {
+        return Err(UploadError::of(
+            "bad_source_id",
+            "source_id must be a 16-character hexadecimal prefix",
+        ));
+    }
+    let root = portable_data_root::data_root().map_err(|e| UploadError::of("io", e))?;
+    if !root.exists() {
+        return Ok(false);
+    }
+    Ok(root.join("sources").join(source_id).is_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +313,13 @@ mod tests {
         let s = sha256_prefix(b"hello");
         assert_eq!(s.len(), 16);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn source_id_validation_requires_16_hex_chars() {
+        assert!(is_valid_source_id("0123456789abcdef"));
+        assert!(!is_valid_source_id("0123456789abcde"));
+        assert!(!is_valid_source_id("0123456789abcdeg"));
     }
 
     #[test]

@@ -146,38 +146,44 @@ async function diagnosticReportPayload() {
     attaches_report: withReport.diagnostic_report?.schema === 'llmwiki.extraction_diagnostic_report.v1',
     submit_attaches_report: sent.diagnostic_report?.schema === 'llmwiki.extraction_diagnostic_report.v1',
     omits_when_null: !('diagnostic_report' in noReport),
+    sends_summary_only:
+      withReport.diagnostic_report?.report_kind === 'summary' &&
+      withReport.diagnostic_report?.summary_only === true &&
+      withReport.diagnostic_report?.consent?.full_report_included === false,
     includes_candidate_evidence_shape:
       withReport.diagnostic_report?.offline_candidates?.[0]?.evidence?.[0]?.context_excerpt === '짧은 문맥',
     includes_failure_reason:
       withReport.diagnostic_report?.llm_failure_summary?.[0]?.reason === 'JSON 파싱 실패',
-    keeps_report_as_supplied:
-      withReport.diagnostic_report?.llm_batches?.[0]?.advanced_debug === null,
+    drops_raw_debug:
+      withReport.diagnostic_report?.llm_batches?.[0]?.advanced_debug_summary === null &&
+      !('advanced_debug' in (withReport.diagnostic_report?.llm_batches?.[0] ?? {})),
     view_has_single_default_checked_report_checkbox:
       /id="fb-report"/.test(tab) &&
       !/id="fb-report-basic"/.test(tab) &&
       !/id="fb-report-advanced"/.test(tab) &&
-      /추출 진단 리포트 포함/.test(tab) &&
+      /요약 진단 포함/.test(tab) &&
       /let include_report = \$state\(true\)/.test(tab),
-    view_sends_full_report_when_checked:
+    view_sends_summary_report_when_checked:
       /if \(!include_report\) return null;/.test(tab) &&
-      /includeAdvancedDebug: true/.test(tab) &&
-      /raw LLM 응답/.test(tab) &&
-      /일부 원문 청크 발췌/.test(tab),
+      /includeAdvancedDebug: false/.test(tab) &&
+      /전체 로그 대신 요약본만/.test(tab) &&
+      /사용자가 쓴 내용은\s+요약하지 않습니다/.test(tab),
     view_resets_to_checked_after_success:
       /include_report = true;/.test(tab),
     view_mentions_report_can_be_disabled:
-      /체크를 끄면 진단 리포트 전체를 보내지 않습니다/.test(tab),
+      /체크를 끄면 요약 진단도 보내지 않고/.test(tab),
     view_mentions_redaction:
       /API 키/.test(tab) && /OAuth 토큰/.test(tab) && /auth\.json/.test(tab) && /원본 파일명/.test(tab),
   };
   if (!report.attaches_report) return fail(report, 'diagnostic report not attached to payload');
   if (!report.submit_attaches_report) return fail(report, 'submitFeedback dropped diagnostic_report from the actual POST body');
   if (!report.omits_when_null) return fail(report, 'null diagnostic report should be omitted');
+  if (!report.sends_summary_only) return fail(report, 'diagnostic payload should be summary-only for free Formspree');
   if (!report.includes_candidate_evidence_shape) return fail(report, 'candidate evidence/context shape missing');
   if (!report.includes_failure_reason) return fail(report, 'LLM parse/failure reason missing');
-  if (!report.keeps_report_as_supplied) return fail(report, 'payload should attach the already-built report without reshaping it');
+  if (!report.drops_raw_debug) return fail(report, 'summary payload should not carry raw advanced debug');
   if (!report.view_has_single_default_checked_report_checkbox) return fail(report, 'FeedbackTab should expose one checked-by-default diagnostic checkbox');
-  if (!report.view_sends_full_report_when_checked) return fail(report, 'checked diagnostic report should include advanced/raw debug fields');
+  if (!report.view_sends_summary_report_when_checked) return fail(report, 'checked diagnostic report should send a summary, not full/raw debug');
   if (!report.view_resets_to_checked_after_success) return fail(report, 'FeedbackTab should reset the diagnostic checkbox to checked after success');
   if (!report.view_mentions_report_can_be_disabled) return fail(report, 'FeedbackTab should disclose that unchecking omits the full report');
   if (!report.view_mentions_redaction) return fail(report, 'FeedbackTab does not disclose redacted sensitive fields');
@@ -305,15 +311,18 @@ async function diagnosticReportCompaction() {
   });
   const report = {
     scenario: 'diagnostic-report-compaction',
-    compacted: payload.diagnostic_report?.truncated === true,
-    keeps_raw_excerpt:
-      typeof payload.diagnostic_report?.llm_batches?.[0]?.advanced_debug?.raw_response_excerpt === 'string',
+    summary_only: payload.diagnostic_report?.summary_only === true,
+    under_target: JSON.stringify(payload.diagnostic_report).length <= DIAGNOSTIC_REPORT_MAX_JSON_CHARS,
     drops_full_raw:
-      !('raw_response' in (payload.diagnostic_report?.llm_batches?.[0]?.advanced_debug ?? {})),
+      !JSON.stringify(payload.diagnostic_report).includes('x'.repeat(100)) &&
+      !('advanced_debug' in (payload.diagnostic_report?.llm_batches?.[0] ?? {})),
+    records_raw_not_included:
+      payload.diagnostic_report?.llm_batches?.[0]?.advanced_debug_summary?.raw_response_included === false,
   };
-  if (!report.compacted) return fail(report, 'oversized diagnostic report was not compacted');
-  if (!report.keeps_raw_excerpt) return fail(report, 'compacted report did not keep a raw response excerpt');
-  if (!report.drops_full_raw) return fail(report, 'compacted report still carries the full raw response');
+  if (!report.summary_only) return fail(report, 'diagnostic report should always be summary-only');
+  if (!report.under_target) return fail(report, 'summary diagnostic report exceeded the free Formspree target size');
+  if (!report.drops_full_raw) return fail(report, 'summary still carries raw advanced debug');
+  if (!report.records_raw_not_included) return fail(report, 'summary should explicitly record that raw response is excluded');
   pass(report);
 }
 

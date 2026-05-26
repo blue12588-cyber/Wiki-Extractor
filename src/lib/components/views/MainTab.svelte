@@ -17,7 +17,7 @@
   import BridgePanel from '$lib/components/BridgePanel.svelte';
   import BatchBridgePanel from '$lib/components/BatchBridgePanel.svelte';
   import type { TextQualityReport } from '$lib/extract/textQuality';
-  import { pipeline } from '$lib/pipeline/store.svelte';
+  import { pipeline, type SourceSummary } from '$lib/pipeline/store.svelte';
   import {
     onFileSelected,
     onOutlineParsed,
@@ -74,6 +74,23 @@
     const more = report.low_text_pages > pages.length ? ` 외 ${report.low_text_pages - pages.length}쪽` : '';
     return `${pages.join(', ')}${more}`;
   }
+
+  function sourceTitle(source: SourceSummary): string {
+    return source.bibliography?.title || source.filename;
+  }
+
+  function sourceBibliographyDetails(source: SourceSummary): string[] {
+    const bibliography = source.bibliography;
+    if (!bibliography) return [];
+    const details = [
+      bibliography.author ? `저자 ${bibliography.author}` : null,
+      bibliography.translator ? `역자 ${bibliography.translator}` : null,
+      bibliography.publisher,
+      bibliography.year,
+      bibliography.confidence === 'filename_fallback' ? '파일명 기반 임시 표기' : null,
+    ];
+    return details.filter((item): item is string => !!item);
+  }
 </script>
 
 <section class="block">
@@ -90,12 +107,18 @@
     <div class="source-list" aria-label="올린 자료 목록">
       <div class="source-list-head">
         <strong>올린 자료</strong>
-        <span>{pipeline.sources.length}개 · 청크 {pipeline.chunks.length}개</span>
+        <span>총 {pipeline.sources.length}개 · 현재 청크 {pipeline.chunks.length}개</span>
       </div>
       <ul>
         {#each pipeline.sources as source (source.source_id)}
+          {@const details = sourceBibliographyDetails(source)}
           <li>
-            <span class="source-name" title={source.filename}>{source.filename}</span>
+            <span class="source-main">
+              <span class="source-name" title={source.filename}>{sourceTitle(source)}</span>
+              {#if details.length > 0}
+                <span class="source-biblio">{details.join(' · ')}</span>
+              {/if}
+            </span>
             <span class="source-meta">
               {source.source_kind} · 후보 {source.candidate_count}개 · 청크 {source.chunk_count}개
               {source.text_quality_level ? ` · 텍스트 ${source.text_quality_level}` : ''}
@@ -229,28 +252,36 @@
   </div>
   <CandidateCardList
     cards={pipeline.candidateCards}
+    outline={pipeline.outline}
+    sources={pipeline.sources}
     busy={pipeline.scoring}
+    activeCandidateKey={pipeline.bridgeCandidateId}
+    showBatchBridge={!!batchBridgeInput}
     ondecision={onCandidateDecision}
     oncopyprompt={openBridge}
     oncopybatch={openBatchBridge}
-  />
+  >
+    {#snippet batchBridge()}
+      {#if batchBridgeInput}
+        <BatchBridgePanel
+          input={batchBridgeInput}
+          onimport={importBatchBridgeCandidates}
+          onclose={closeBatchBridge}
+        />
+      {/if}
+    {/snippet}
 
-  {#if batchBridgeInput}
-    <BatchBridgePanel
-      input={batchBridgeInput}
-      onimport={importBatchBridgeCandidates}
-      onclose={closeBatchBridge}
-    />
-  {/if}
-
-  {#if bridgeInput}
-    <BridgePanel
-      input={bridgeInput}
-      {autoMode}
-      onimport={importBridgeCandidate}
-      onclose={closeBridge}
-    />
-  {/if}
+    {#snippet inlineBridge()}
+      {#if bridgeInput}
+        <BridgePanel
+          input={bridgeInput}
+          {autoMode}
+          onimport={importBridgeCandidate}
+          onclose={closeBridge}
+        />
+      {/if}
+    {/snippet}
+  </CandidateCardList>
 </section>
 
 <style>
@@ -296,7 +327,7 @@
   .source-list-head,
   .source-list li {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-md);
   }
@@ -325,17 +356,29 @@
     min-width: 0;
   }
 
-  .source-name {
+  .source-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  .source-name {
     font-size: 0.8125rem;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+
+  .source-biblio {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
   }
 
   .source-meta {
     flex: 0 0 auto;
+    text-align: right;
   }
 
   .ocr-quality {
@@ -470,5 +513,17 @@
     background: var(--surface-elevated);
     padding: 0 var(--space-xs);
     border-radius: var(--radius-tight);
+  }
+
+  @media (max-width: 720px) {
+    .source-list-head,
+    .source-list li {
+      flex-direction: column;
+      gap: var(--space-xs);
+    }
+
+    .source-meta {
+      text-align: left;
+    }
   }
 </style>

@@ -42,24 +42,22 @@
 
   const tooltips: Record<AuthIndicatorState, string> = {
     'unconfigured':
-      'Codex 인증 파일을 찾을 수 없습니다. 자동 모드를 쓰려면 Node.js 설치 후 `npm i -g @openai/codex`, `codex login`을 실행하세요. 후보별 복붙 모드는 그대로 사용할 수 있습니다.',
+      '자동 모드가 필요하면 PowerShell에서 `codex --version`, `codex login status`를 확인하세요. 로그인 전이면 `codex login`을 실행합니다. 복붙 모드는 그대로 사용할 수 있습니다.',
     'codex-detected':
-      'Codex 인증 파일이 있습니다. 자동 LLM 연결이 시작되면 번역·자동 생성 기능을 사용할 수 있습니다.',
+      'Codex 로그인이 확인되었습니다. 자동 연결이 준비되면 번역·자동 생성을 사용할 수 있습니다.',
     'oauth-child-up':
       '자동 LLM 연결이 준비되었습니다. 번역과 자동 위키 생성을 사용할 수 있습니다.',
     'degraded':
-      'Codex 로그인은 감지됐지만 자동 LLM 연결 도구가 준비되지 않았습니다. 자동 위키 생성·번역은 실행되지 않으며, 복붙 브릿지와 오프라인 후보 추출은 계속 사용할 수 있습니다.',
+      'Codex 로그인은 확인됐지만 자동 연결 도구가 준비되지 않았습니다. `codex login status`가 정상인지 확인하고, 필요하면 자동 연결을 재시도하세요.',
     'dev-fallback-active':
       '개발용 대체 플래그가 설정되었거나 Codex 인증 파일이 없습니다. LLM 기능은 스텁(모의)으로 동작합니다.',
   };
 
   let degradedHelp = $derived([
     detail ? `원인: ${detail}` : tooltips.degraded,
-    '해결: 1) 로그인 탭의 [자동 연결 재시도]를 누르세요.',
-    '2) 계속 안 되면 [다시 검출]과 [ChatGPT로 로그인]을 다시 진행하세요.',
-    '3) Windows/WSL 중 Codex가 설치된 쪽에 Node.js와 npx가 있어야 합니다.',
-    '4) 첫 실행은 openai-oauth 다운로드 때문에 오래 걸릴 수 있습니다. 방화벽이나 회사망이면 실패할 수 있습니다.',
-    '5) 그래도 안 되면 앱을 재시작한 뒤 다시 시도하세요.',
+    '1) [자동 연결 재시도]를 누르세요.',
+    '2) PowerShell에서 `codex login status`를 확인하세요.',
+    '3) 로그인은 정상인데도 실패하면 Node.js/npx, 방화벽, 앱 재시작을 확인하세요.',
   ].join('\n'));
 
   let tooltip = $derived(state === 'degraded' ? degradedHelp : tooltips[state]);

@@ -23,7 +23,15 @@
 
 import type { ExtractionDiagnosticReport } from '$lib/diagnostics/extractionReport';
 
-export const DIAGNOSTIC_REPORT_MAX_JSON_CHARS = 900_000;
+export const DIAGNOSTIC_REPORT_MAX_JSON_CHARS = 48_000;
+
+const SUMMARY_PRESETS = [
+  { candidates: 24, batches: 12, batchCandidates: 6, outlineNodes: 80, entries: 40 },
+  { candidates: 14, batches: 8, batchCandidates: 4, outlineNodes: 60, entries: 25 },
+  { candidates: 8, batches: 5, batchCandidates: 2, outlineNodes: 40, entries: 15 },
+  { candidates: 3, batches: 3, batchCandidates: 1, outlineNodes: 24, entries: 8 },
+  { candidates: 0, batches: 2, batchCandidates: 0, outlineNodes: 16, entries: 5 },
+] as const;
 
 export interface FeedbackInput {
   /** Optional subject line. */
@@ -72,64 +80,188 @@ export function validateFeedback(raw: FeedbackInput): FeedbackValidation {
   };
 }
 
-function fitDiagnosticReportForPayload(report: ExtractionDiagnosticReport): ExtractionDiagnosticReport | Record<string, unknown> {
-  const json = JSON.stringify(report);
-  if (json.length <= DIAGNOSTIC_REPORT_MAX_JSON_CHARS) return report;
+function fitDiagnosticReportForPayload(report: ExtractionDiagnosticReport): Record<string, unknown> {
+  for (const preset of SUMMARY_PRESETS) {
+    const summary = buildDiagnosticReportSummary(report, preset);
+    const jsonChars = JSON.stringify(summary).length;
+    if (jsonChars <= DIAGNOSTIC_REPORT_MAX_JSON_CHARS) {
+      return {
+        ...summary,
+        summary_json_chars: jsonChars,
+      };
+    }
+  }
+
+  const minimal = buildDiagnosticReportSummary(report, SUMMARY_PRESETS[SUMMARY_PRESETS.length - 1]);
+  const jsonChars = JSON.stringify(minimal).length;
+  return {
+    ...minimal,
+    summary_json_chars: jsonChars,
+    summary_over_target: jsonChars > DIAGNOSTIC_REPORT_MAX_JSON_CHARS,
+  };
+}
+
+function text(value: unknown, max = 220): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = value.replace(/\s+/g, ' ').trim();
+  if (!clean) return null;
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
+function arrayOf<T>(value: T[] | undefined, limit: number): T[] {
+  return Array.isArray(value) ? value.slice(0, limit) : [];
+}
+
+function count(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+type SummaryPreset = (typeof SUMMARY_PRESETS)[number];
+
+function buildDiagnosticReportSummary(
+  report: ExtractionDiagnosticReport,
+  preset: SummaryPreset,
+): Record<string, unknown> {
+  const outline = report.outline ?? { node_count: 0, root_count: 0, nodes: [] };
+  const offlineCandidateSource = arrayOf(report.offline_candidates, Number.MAX_SAFE_INTEGER);
+  const llmBatchSource = arrayOf(report.llm_batches, Number.MAX_SAFE_INTEGER);
+  const persistedEntrySource = arrayOf(report.persisted_entries_summary, Number.MAX_SAFE_INTEGER);
+  const offlineCandidates = arrayOf(report.offline_candidates, preset.candidates).map((cand) => ({
+    candidate_id: cand.candidate_id,
+    title: text(cand.title, 180),
+    type: cand.type,
+    recommended_action: cand.recommended_action,
+    user_decision: cand.user_decision,
+    target_entry_title: text(cand.target_entry_title, 160),
+    mapped_outline: cand.mapped_outline
+      ? {
+          node_id: cand.mapped_outline.node_id,
+          title: text(cand.mapped_outline.title, 180),
+          score: cand.mapped_outline.score,
+        }
+      : null,
+    original_terms: arrayOf(cand.original_terms, 10).map((term) => text(term, 60)).filter(Boolean),
+    evidence: arrayOf(cand.evidence, 2).map((ev) => ({
+      evidence_refs: arrayOf(ev.evidence_refs, 3),
+      chunk_id: ev.chunk_id,
+      page: ev.page,
+      line: ev.line,
+      context_excerpt: text(ev.context_excerpt, 240),
+    })),
+    rationale: {
+      why: arrayOf(cand.rationale?.why, 4).map((item) => text(item, 160)).filter(Boolean),
+      matched_keywords: arrayOf(cand.rationale?.matched_keywords, 8),
+      claim_verbs: arrayOf(cand.rationale?.claim_verbs, 8),
+      boundary: arrayOf(cand.rationale?.boundary, 3).map((item) => text(item, 140)).filter(Boolean),
+      demotion: arrayOf(cand.rationale?.demotion, 3).map((item) => text(item, 140)).filter(Boolean),
+    },
+    step_judgment: arrayOf(cand.step_judgment, 5).map((step) => ({
+      step: step.step,
+      status: step.status,
+      reason: text(step.reason, 160),
+    })),
+  }));
+
+  const llmBatches = arrayOf(report.llm_batches, preset.batches).map((batch) => {
+    const candidates = arrayOf(batch.candidates, preset.batchCandidates).map((cand) => ({
+      index: cand.index,
+      title: text(cand.title, 160),
+      type: cand.type,
+      importable: cand.importable,
+      confidence: cand.confidence,
+      discipline_profile: text(cand.discipline_profile, 100),
+      discipline_unit: text(cand.discipline_unit, 100),
+      mapped_schema_field: text(cand.mapped_schema_field, 100),
+      mapping_reason: text(cand.mapping_reason, 180),
+      violations: arrayOf(cand.violations, 4).map((item) => text(item, 140)).filter(Boolean),
+      evidence: arrayOf(cand.evidence, 2).map((ev) => ({
+        chunk_id: ev.chunk_id,
+        page: ev.page,
+        quote_excerpt: text(ev.quote_excerpt, 180),
+        translation_ko_excerpt: text(ev.translation_ko_excerpt, 180),
+        context_excerpt: text(ev.context_excerpt, 200),
+      })),
+      rejected_evidence_count: count(cand.rejected_evidence),
+    }));
+
+    return {
+      source_id: batch.source_id,
+      provider_ok: batch.provider_ok,
+      provider_error: text(batch.provider_error, 220),
+      parse_ok: batch.parse_ok,
+      parse_error: text(batch.parse_error, 220),
+      parse_recovered: batch.parse_recovered,
+      parse_recovered_count: batch.parse_recovered_count,
+      validation_shape_ok: batch.validation_shape_ok,
+      validation_top_level_error: text(batch.validation_top_level_error, 220),
+      candidate_count: count(batch.candidates),
+      importable_count: Array.isArray(batch.candidates)
+        ? batch.candidates.filter((cand) => cand.importable).length
+        : 0,
+      candidates,
+      omitted_candidate_count: Math.max(count(batch.candidates) - candidates.length, 0),
+      advanced_debug_summary: batch.advanced_debug
+        ? {
+            batch_index: batch.advanced_debug.batch_index,
+            total_batches: batch.advanced_debug.total_batches,
+            prompt_version: text(batch.advanced_debug.prompt_version, 80),
+            prompt_char_count: batch.advanced_debug.prompt_char_count,
+            chunk_ids: arrayOf(batch.advanced_debug.chunk_ids, 12),
+            raw_response_included: false,
+            source_chunk_samples_included: false,
+          }
+        : null,
+    };
+  });
 
   return {
     schema: report.schema,
+    report_kind: 'summary',
+    summary_only: true,
     created_at: report.created_at,
-    consent: report.consent,
+    summary_notice:
+      '무료 피드백 전송을 위해 전체 로그 대신 핵심 요약 진단만 전송합니다. 사용자 피드백 본문은 요약하지 않습니다.',
+    consent: {
+      basic_diagnostic_included: true,
+      advanced_debug_included: false,
+      full_report_included: false,
+    },
     privacy_guards: report.privacy_guards,
     app_context: report.app_context,
     source: report.source,
     text_quality: report.text_quality,
     outline: {
-      node_count: report.outline.node_count,
-      root_count: report.outline.root_count,
-      nodes: report.outline.nodes.slice(0, 80),
-      truncated_nodes: Math.max(report.outline.nodes.length - 80, 0),
+      node_count: outline.node_count,
+      root_count: outline.root_count,
+      nodes: arrayOf(outline.nodes, preset.outlineNodes),
+      omitted_node_count: Math.max(outline.nodes.length - preset.outlineNodes, 0),
     },
-    counts: report.counts,
+    counts: report.counts ?? {},
     auto_wiki_progress: report.auto_wiki_progress,
-    offline_candidates: report.offline_candidates.slice(0, 120),
-    llm_failure_summary: report.llm_failure_summary.slice(0, 120),
-    llm_batches: report.llm_batches.slice(-20).map((batch) => ({
-      source_id: batch.source_id,
-      provider_ok: batch.provider_ok,
-      provider_error: batch.provider_error,
-      parse_ok: batch.parse_ok,
-      parse_error: batch.parse_error,
-      parse_recovered: batch.parse_recovered,
-      parse_recovered_count: batch.parse_recovered_count,
-      validation_shape_ok: batch.validation_shape_ok,
-      validation_top_level_error: batch.validation_top_level_error,
-      candidates: batch.candidates,
-      advanced_debug: batch.advanced_debug
-        ? {
-            batch_index: batch.advanced_debug.batch_index,
-            total_batches: batch.advanced_debug.total_batches,
-            chunk_orders: batch.advanced_debug.chunk_orders,
-            chunk_ids: batch.advanced_debug.chunk_ids,
-            prompt_version: batch.advanced_debug.prompt_version,
-            prompt_char_count: batch.advanced_debug.prompt_char_count,
-            raw_response_excerpt:
-              typeof batch.advanced_debug.raw_response === 'string'
-                ? batch.advanced_debug.raw_response.slice(0, 12_000)
-                : null,
-            raw_response_truncated:
-              typeof batch.advanced_debug.raw_response === 'string' &&
-              batch.advanced_debug.raw_response.length > 12_000,
-            source_chunk_samples: batch.advanced_debug.source_chunk_samples,
-          }
-        : null,
+    offline_candidates: offlineCandidates,
+    omitted_offline_candidate_count: Math.max(
+      offlineCandidateSource.length - offlineCandidates.length,
+      0,
+    ),
+    llm_failure_summary: arrayOf(report.llm_failure_summary, 24).map((failure) => ({
+      ...failure,
+      reason: text(failure.reason, 240),
     })),
-    persisted_entries_summary: report.persisted_entries_summary.slice(0, 120),
+    llm_batches: llmBatches,
+    omitted_llm_batch_count: Math.max(llmBatchSource.length - llmBatches.length, 0),
+    persisted_entries_summary: arrayOf(report.persisted_entries_summary, preset.entries),
+    omitted_persisted_entry_count: Math.max(
+      persistedEntrySource.length - preset.entries,
+      0,
+    ),
     redaction_note: report.redaction_note,
-    truncated: true,
+    original_report_shape: {
+      offline_candidate_count: offlineCandidateSource.length,
+      llm_batch_count: llmBatchSource.length,
+      persisted_entry_count: persistedEntrySource.length,
+    },
     truncation_reason:
-      `진단 리포트가 ${DIAGNOSTIC_REPORT_MAX_JSON_CHARS}자 제한을 넘어 요약본으로 전송되었습니다.`,
-    original_json_chars: json.length,
+      '전체 진단 리포트가 길어질 수 있어 후보·배치·문맥은 대표 항목과 개수 요약으로 전송합니다.',
   };
 }
 

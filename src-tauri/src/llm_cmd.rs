@@ -454,6 +454,59 @@ fn response_headers_debug(headers: &reqwest::header::HeaderMap) -> String {
         .join(", ")
 }
 
+fn looks_like_quota_or_rate_limit(code: u16, body: &str) -> bool {
+    if code == 429 {
+        return true;
+    }
+    let lower = body.to_lowercase();
+    [
+        "insufficient_quota",
+        "rate_limit",
+        "rate limit",
+        "too many requests",
+        "usage limit",
+        "limit exceeded",
+        "quota",
+        "temporarily limited",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn llm_http_status_error(code: u16, headers: &str, body: &str) -> LlmError {
+    let snippet = body.chars().take(300).collect::<String>();
+    let detail = if snippet.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" 응답 일부: {snippet}")
+    };
+
+    if looks_like_quota_or_rate_limit(code, body) {
+        return LlmError::degraded(
+            "quota_or_rate_limit",
+            format!(
+                "ChatGPT/OpenAI 계정의 사용 한도 또는 일시적 요청 제한에 걸렸을 수 있습니다({code}). \
+                ChatGPT에서 한도 안내를 확인하거나 잠시 후 다시 시도하세요. \
+                보기·편집·오프라인 후보 추출은 계속 가능합니다.{detail}"
+            ),
+        );
+    }
+
+    if code == 401 || code == 403 {
+        return LlmError::degraded(
+            "auth_rejected",
+            format!(
+                "자동 LLM 인증이 거부되었습니다({code}). 로그인 탭에서 다시 검출하거나 ChatGPT 로그인을 다시 진행하세요.{detail}"
+            ),
+        );
+    }
+
+    LlmError::degraded(
+        "http_status",
+        format!("LLM 엔드포인트가 {code} 응답을 반환했습니다({headers}): {snippet}"),
+    )
+}
+
 async fn read_response_body_lossy(mut resp: reqwest::Response) -> Result<String, reqwest::Error> {
     let mut bytes = Vec::new();
     loop {
@@ -528,13 +581,7 @@ async fn chat_completion(system: &str, user: String) -> Result<String, LlmError>
         let code = resp.status().as_u16();
         let headers = response_headers_debug(resp.headers());
         let text = read_response_body_lossy(resp).await.unwrap_or_default();
-        return Err(LlmError::degraded(
-            "http_status",
-            format!(
-                "LLM 엔드포인트가 {code} 응답을 반환했습니다({headers}): {}",
-                text.chars().take(300).collect::<String>()
-            ),
-        ));
+        return Err(llm_http_status_error(code, &headers, &text));
     }
 
     // Capture the raw body so an empty/unexpected shape can be diagnosed (the
@@ -739,6 +786,24 @@ data: {"type":"response.content_part.done","part":{"type":"output_text","text":"
             .replace("{base}", "http://127.0.0.1:9999/v1");
         // Responses API (openai-oauth proxy), NOT Chat Completions.
         assert_eq!(filled, "http://127.0.0.1:9999/v1/responses");
+    }
+
+    #[test]
+    fn http_status_error_flags_quota_or_rate_limit() {
+        let err = llm_http_status_error(
+            429,
+            "content-type=application/json",
+            r#"{"error":{"code":"insufficient_quota","message":"usage limit exceeded"}}"#,
+        );
+        assert_eq!(err.kind, "quota_or_rate_limit");
+        assert!(err.reason.contains("사용 한도"));
+    }
+
+    #[test]
+    fn http_status_error_flags_auth_rejected() {
+        let err = llm_http_status_error(403, "content-type=text/plain", "forbidden");
+        assert_eq!(err.kind, "auth_rejected");
+        assert!(err.reason.contains("다시 검출"));
     }
 
     #[test]

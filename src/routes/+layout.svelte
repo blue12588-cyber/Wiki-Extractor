@@ -41,7 +41,11 @@
   import { pipeline } from '$lib/pipeline/store.svelte';
   import { llmConfig } from '$lib/llm/llmClient';
   import { loadAllEntries } from '$lib/wiki/wikiStore';
-  import { loadPersistedCandidateReviewState, loadPersistedOutline } from '$lib/pipeline/actions';
+  import {
+    loadPersistedCandidateReviewState,
+    loadPersistedOutline,
+    loadPersistedSourceSummaries,
+  } from '$lib/pipeline/actions';
 
   let { children } = $props();
 
@@ -59,6 +63,7 @@
   onMount(async () => {
     if (pipeline.bootstrapped) return;
     loadPersistedOutline();
+    loadPersistedSourceSummaries();
     await loadPersistedCandidateReviewState();
     pipeline.llmCfg = await llmConfig();
     try {

@@ -14,7 +14,10 @@
   import { pipeline } from '$lib/pipeline/store.svelte';
   import { onReviewClaim, onSaveEntry, onTranslate } from '$lib/pipeline/actions';
 
+  type ViewMode = 'outline' | 'source';
+
   let showStructural = $state(false);
+  let viewMode = $state<ViewMode>('outline');
 
   function structureReason(entry: (typeof pipeline.entries)[number]): string | null {
     return structuralReasonForCandidate({
@@ -38,6 +41,60 @@
   let visibleRows = $derived(
     showStructural ? entryRows : entryRows.filter((row) => !row.structuralReason),
   );
+
+  function outlineLabel(nodeId: string | null): string {
+    if (!nodeId) return '목차 미분류';
+    const node = pipeline.outline?.nodes.find((item) => item.id === nodeId);
+    if (!node) return '목차 미분류';
+    return node.label ? `${node.label} ${node.title}` : node.title;
+  }
+
+  function sourceLabel(sourceId: string | null): string {
+    if (!sourceId) return '문헌 미분류';
+    const source = pipeline.sources.find((item) => item.source_id === sourceId);
+    return source?.bibliography?.display_title || source?.filename || `원문 ${sourceId}`;
+  }
+
+  let groupedRows = $derived.by(() => {
+    if (viewMode === 'source') {
+      const sourceOrder = new Map(pipeline.sources.map((source, index) => [source.source_id, index]));
+      const map = new Map<string, typeof visibleRows>();
+      for (const row of visibleRows) {
+        const sourceId = row.entry.source_ids[0] ?? 'unknown';
+        const group = map.get(sourceId) ?? [];
+        group.push(row);
+        map.set(sourceId, group);
+      }
+      return [...map.entries()]
+        .sort((a, b) => (sourceOrder.get(a[0]) ?? 9999) - (sourceOrder.get(b[0]) ?? 9999))
+        .map(([sourceId, rows], index) => ({
+          id: `source:${sourceId}`,
+          title: sourceLabel(sourceId === 'unknown' ? null : sourceId),
+          meta: `${rows.length}개 항목 · 문헌별 보기`,
+          rows,
+          open: index === 0,
+        }));
+    }
+
+    const nodes = pipeline.outline?.nodes ?? [];
+    const order = new Map(nodes.map((node, index) => [node.id, index]));
+    const map = new Map<string, typeof visibleRows>();
+    for (const row of visibleRows) {
+      const nodeId = row.entry.outline_node_id ?? 'unmapped';
+      const group = map.get(nodeId) ?? [];
+      group.push(row);
+      map.set(nodeId, group);
+    }
+    return [...map.entries()]
+      .sort((a, b) => (order.get(a[0]) ?? 9999) - (order.get(b[0]) ?? 9999))
+      .map(([nodeId, rows], index) => ({
+        id: `outline:${nodeId}`,
+        title: outlineLabel(nodeId === 'unmapped' ? null : nodeId),
+        meta: `${rows.length}개 항목 · 논문 작성 순서`,
+        rows,
+        open: index === 0,
+      }));
+  });
 </script>
 
 <section class="block">
@@ -50,6 +107,22 @@
         {showStructural ? '구조 항목 숨기기' : `숨긴 구조 항목 ${hiddenStructuralCount}개 보기`}
       </button>
     {/if}
+    <div class="view-switch" aria-label="위키 보기 방식">
+      <button
+        type="button"
+        class:active={viewMode === 'outline'}
+        onclick={() => (viewMode = 'outline')}
+      >
+        목차별
+      </button>
+      <button
+        type="button"
+        class:active={viewMode === 'source'}
+        onclick={() => (viewMode = 'source')}
+      >
+        문헌별
+      </button>
+    </div>
   </div>
   <p class="section-lede">
     항목·매핑·주장을 직접 수정하고 저장하세요. 저장 내용은 <code>data/wiki/</code>에 영속되어
@@ -73,16 +146,26 @@
       표시할 위키 지식 항목이 없습니다. 숨긴 구조 항목을 확인하려면 위 버튼을 누르세요.
     </div>
   {:else}
-    <div class="entry-stack">
-      {#each visibleRows as row (row.entry.id)}
-        <WikiEntryEditor
-          bind:entry={pipeline.entries[row.index]}
-          outline={pipeline.outline}
-          busy={pipeline.busy}
-          onsave={onSaveEntry}
-          ontranslate={(cid, orig) => onTranslate(pipeline.entries[row.index], cid, orig)}
-          onreview={(cid, orig) => onReviewClaim(pipeline.entries[row.index], cid, orig)}
-        />
+    <div class="entry-groups">
+      {#each groupedRows as group (group.id)}
+        <details class="entry-group" open={group.open}>
+          <summary>
+            <span class="group-title">{group.title}</span>
+            <span class="group-meta">{group.meta}</span>
+          </summary>
+          <div class="entry-stack">
+            {#each group.rows as row (row.entry.id)}
+              <WikiEntryEditor
+                bind:entry={pipeline.entries[row.index]}
+                outline={pipeline.outline}
+                busy={pipeline.busy}
+                onsave={onSaveEntry}
+                ontranslate={(cid, orig) => onTranslate(pipeline.entries[row.index], cid, orig)}
+                onreview={(cid, orig) => onReviewClaim(pipeline.entries[row.index], cid, orig)}
+              />
+            {/each}
+          </div>
+        </details>
       {/each}
     </div>
   {/if}
@@ -132,6 +215,31 @@
     color: var(--text-primary);
   }
 
+  .view-switch {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    background: var(--surface-sunken);
+  }
+  .view-switch button {
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: var(--heading-family);
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 3px var(--space-sm);
+  }
+  .view-switch button.active {
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-hairline);
+  }
+
   .structure-note {
     margin: 0;
     padding: var(--space-sm) var(--space-md);
@@ -163,11 +271,48 @@
     color: var(--text-secondary);
   }
 
+  .entry-groups {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+
+  .entry-group {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-tight);
+    background: var(--surface-sunken);
+  }
+
+  .entry-group summary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-md);
+    cursor: pointer;
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .group-title {
+    min-width: 0;
+    color: var(--text-primary);
+    font-family: var(--heading-family);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+
+  .group-meta {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+  }
+
   .entry-stack {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
     gap: var(--space-lg);
     align-items: start;
+    padding: 0 var(--space-md) var(--space-md);
   }
 
   code {

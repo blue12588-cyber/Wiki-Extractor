@@ -87,6 +87,17 @@
         </select>
       </div>
     </div>
+
+    <div class="entry-actions top-actions">
+      <button type="button" class="btn primary" onclick={handle_save} disabled={busy}>
+        저장
+      </button>
+      {#if dirty}
+        <span class="status dirty">저장되지 않은 변경 사항</span>
+      {:else if saved_at}
+        <span class="status ok">저장됨 · {saved_at}</span>
+      {/if}
+    </div>
   </header>
 
   <section class="claims" aria-label="주장 목록">
@@ -145,7 +156,7 @@
     {/if}
   </section>
 
-  <footer class="entry-foot">
+  <footer class="entry-actions entry-foot">
     <button type="button" class="btn primary" onclick={handle_save} disabled={busy}>
       저장
     </button>
@@ -180,6 +191,17 @@
     display: flex;
     gap: var(--space-md);
     flex-wrap: wrap;
+  }
+
+  .entry-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    flex-wrap: wrap;
+  }
+
+  .top-actions {
+    padding-top: var(--space-xs);
   }
 
   .field {
@@ -298,12 +320,6 @@
   .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-  }
-
-  .entry-foot {
-    display: flex;
-    align-items: center;
-    gap: var(--space-md);
   }
 
   .status {

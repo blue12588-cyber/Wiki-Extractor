@@ -10,7 +10,7 @@
  * No string here was paraphrased from slice 3; all notices were already Korean.
  */
 
-import { pipeline } from './store.svelte';
+import { pipeline, type SourceSummary } from './store.svelte';
 import { verifyMagicBytes } from '$lib/upload/magicBytes';
 import { computeSourceId } from '$lib/upload/sourceId';
 import {
@@ -44,7 +44,7 @@ import {
 } from '$lib/candidate/candidateEngine';
 import { outlineKeywords } from '$lib/candidate/candidateEngine';
 import { candidateReviewKey, type CandidateReviewState } from '$lib/candidate/reviewState';
-import { tokenSimilarity } from '$lib/candidate/keywordMatch';
+import { overlapTerms, tokenSimilarity, tokenize } from '$lib/candidate/keywordMatch';
 import type { Chunk } from '$lib/chunk/chunker';
 import { buildGlobalPrompt, PROMPT_VERSION, type BatchPromptInput, type PromptInput } from '$lib/bridge/promptBuilder';
 import { parseResponse } from '$lib/bridge/responseParser';
@@ -54,10 +54,12 @@ import {
   validatedCandidateToTrace,
   type AutoLlmBatchTrace,
 } from '$lib/diagnostics/extractionReport';
+import { inferBibliographicMetadata } from '$lib/source/bibliography';
 
 const AUTO_CHUNKS_PER_BATCH = 8;
 const AUTO_BATCHES_PER_RUN = 5;
 const OUTLINE_STORAGE_KEY = 'llmwiki:outline:v1';
+const SOURCE_SUMMARY_STORAGE_KEY = 'llmwiki:sources:v1';
 const AUTO_PROGRESS_PREFIX = 'llmwiki:auto-wiki-progress:';
 const NO_OUTLINE_SIGNATURE = 'outline:none';
 
@@ -83,6 +85,24 @@ interface UploadZoneHandle {
   set_reject(msg: string): void;
 }
 
+function duplicateSourceMessage(source_id: string, fallbackName: string): string | null {
+  const existing = pipeline.sources.find((source) => source.source_id === source_id);
+  if (!existing || !sourceIdsInSession().includes(source_id)) return null;
+  const label = existing.bibliography?.display_title || existing.filename || fallbackName;
+  return `똑같은 자료를 또 넣었어요: ${label}. 이미 올린 PDF/원문이라 다시 위키를 만들지 않고 건너뛰었습니다.`;
+}
+
+function existingSourceOnDiskMessage(source_id: string, fallbackName: string): string {
+  return `똑같은 자료를 또 넣었어요: ${fallbackName}. data/sources/${source_id}/에 이미 있어서 다시 위키를 만들지 않고 건너뛰었습니다.`;
+}
+
+function sourceKindFromFilename(filename: string): SourceSummary['source_kind'] {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.pdf')) return 'pdf';
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown';
+  return 'plaintext';
+}
+
 function lsGet(key: string): string | null {
   try {
     if (typeof localStorage === 'undefined') return null;
@@ -106,6 +126,51 @@ function lsRemove(key: string): void {
   } catch {
     /* best-effort */
   }
+}
+
+function normalizeSourceSummary(value: unknown): SourceSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<SourceSummary>;
+  if (typeof raw.source_id !== 'string' || typeof raw.filename !== 'string') return null;
+  const bibliography = raw.bibliography ?? inferBibliographicMetadata({
+    filename: raw.filename,
+    normalizedText: '',
+  });
+  return {
+    source_id: raw.source_id,
+    filename: raw.filename,
+    bibliography,
+    source_kind: raw.source_kind === 'pdf' || raw.source_kind === 'markdown' ? raw.source_kind : 'plaintext',
+    candidate_count: Number.isFinite(raw.candidate_count) ? Number(raw.candidate_count) : 0,
+    chunk_count: Number.isFinite(raw.chunk_count) ? Number(raw.chunk_count) : 0,
+    text_quality_level: raw.text_quality_level ?? null,
+  };
+}
+
+function readPersistedSourceSummaries(): SourceSummary[] {
+  const raw = lsGet(SOURCE_SUMMARY_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(normalizeSourceSummary)
+      .filter((item): item is SourceSummary => !!item);
+  } catch {
+    return [];
+  }
+}
+
+function persistSourceSummaries(sources = pipeline.sources): void {
+  lsSet(SOURCE_SUMMARY_STORAGE_KEY, JSON.stringify(sources));
+}
+
+function rememberSourceSummary(summary: SourceSummary): void {
+  pipeline.sources = [
+    ...pipeline.sources.filter((source) => source.source_id !== summary.source_id),
+    summary,
+  ];
+  persistSourceSummaries();
 }
 
 function shortHash(text: string): string {
@@ -148,7 +213,7 @@ function resetSourceSession() {
   pipeline.bundle = null;
   pipeline.bundles = [];
   pipeline.chunks = [];
-  pipeline.sources = [];
+  pipeline.sources = readPersistedSourceSummaries();
   pipeline.chunkStatus = null;
   pipeline.textQuality = null;
   pipeline.candidateCards = [];
@@ -187,6 +252,10 @@ export function loadPersistedOutline() {
   pipeline.outlineRaw = raw;
   pipeline.outline = raw.trim() ? parseOutline(raw) : null;
   refreshAutoProgressForCurrentOutline();
+}
+
+export function loadPersistedSourceSummaries() {
+  pipeline.sources = readPersistedSourceSummaries();
 }
 
 export function onOutlineRawChanged(raw: string) {
@@ -296,21 +365,23 @@ async function runExtraction(
     pipeline.bundle = makeCombinedBundle(bundles);
     pipeline.textQuality = bundle.text_quality ?? null;
     const chunks = await chunksFromBundle(bundle);
+    const bibliography = inferBibliographicMetadata({
+      filename: file.name,
+      normalizedText: bundle.normalized_text,
+    });
     pipeline.chunks = [
       ...pipeline.chunks.filter((ch) => ch.source_id !== source_id),
       ...chunks,
     ];
-    pipeline.sources = [
-      ...pipeline.sources.filter((s) => s.source_id !== source_id),
-      {
-        source_id,
-        filename: file.name,
-        source_kind: bundle.source_kind,
-        candidate_count: bundle.candidate_items.length,
-        chunk_count: chunks.length,
-        text_quality_level: bundle.text_quality?.level ?? null,
-      },
-    ];
+    rememberSourceSummary({
+      source_id,
+      filename: file.name,
+      bibliography,
+      source_kind: bundle.source_kind,
+      candidate_count: bundle.candidate_items.length,
+      chunk_count: chunks.length,
+      text_quality_level: bundle.text_quality?.level ?? null,
+    });
     if (bundles.length === 1) {
       pipeline.autoWikiProgress = loadAutoProgress(source_id, Math.ceil(chunks.length / AUTO_CHUNKS_PER_BATCH));
     } else {
@@ -345,14 +416,42 @@ async function uploadAndExtractFile(
     return { ok: false, reason };
   }
   const full = new Uint8Array(await file.arrayBuffer());
+  const source_id = await computeSourceId(full);
+  const duplicateMessage = duplicateSourceMessage(source_id, file.name);
+  if (duplicateMessage) {
+    zone?.set_reject(duplicateMessage);
+    pipeline.notice = duplicateMessage;
+    return { ok: false, reason: duplicateMessage };
+  }
 
   const invoke = resolveInvoke();
+  if (invoke) {
+    try {
+      const alreadyExists = await invoke<boolean>('source_exists', { sourceId: source_id });
+      if (alreadyExists) {
+        const reason = existingSourceOnDiskMessage(source_id, file.name);
+        rememberSourceSummary({
+          source_id,
+          filename: file.name,
+          bibliography: inferBibliographicMetadata({ filename: file.name, normalizedText: '' }),
+          source_kind: sourceKindFromFilename(file.name),
+          candidate_count: 0,
+          chunk_count: 0,
+          text_quality_level: null,
+        });
+        zone?.set_reject(reason);
+        pipeline.notice = reason;
+        return { ok: false, reason };
+      }
+    } catch {
+      /* Duplicate-on-disk detection is best-effort; upload still has path guards. */
+    }
+  }
   if (!invoke) {
-    const sid = await computeSourceId(full);
-    if (!opts.quietSuccess) zone?.set_success(`(미리보기) ${file.name} → data/sources/${sid}/`);
-    const extracted = await runExtraction(file, full, sid, zone, { reset: opts.reset });
+    if (!opts.quietSuccess) zone?.set_success(`(미리보기) ${file.name} → data/sources/${source_id}/`);
+    const extracted = await runExtraction(file, full, source_id, zone, { reset: opts.reset });
     if (!extracted) return { ok: false, reason: '추출 실패' };
-    return { ok: true, source_id: sid, chunk_count: chunksForSource(sid).length };
+    return { ok: true, source_id, chunk_count: chunksForSource(source_id).length };
   }
 
   // A WebView2 `File` object exposes no usable OS path (the non-standard
@@ -544,10 +643,14 @@ function bestOutlineNodeId(primary: string, context = ''): string | null {
       return node.id;
     }
 
+    const outlineMatchCount = overlapTerms(tokenize(nodeText), query).length;
+    const outlineMatchScore =
+      outlineMatchCount > 0 ? Math.min(0.34, 0.18 + outlineMatchCount * 0.05) : 0;
     const score = Math.max(
       tokenSimilarity(query, nodeText),
       bigramSimilarity(query, nodeText),
       bigramSimilarity(primary, nodeText),
+      outlineMatchScore,
     );
     if (!best || score > best.score) best = { id: node.id, score };
   }

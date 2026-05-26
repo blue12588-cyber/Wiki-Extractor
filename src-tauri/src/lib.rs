@@ -9,6 +9,7 @@
 //!   - `oauth_proxy_start/stop`   from oauth_child.rs (Slice 5c, Round-2 spawn)
 //!   - `dev_fallback_status`      from dev_fallback.rs
 //!   - `upload_file`              from upload_cmd.rs
+//!   - `source_exists`            from upload_cmd.rs (read-only duplicate check)
 //!   - `extract_fixture`          from extract_cmd.rs
 //!   - `__t1_banner_audit`        from banner_audit.rs (Tier-1 evidence
 //!                                command; not a user-facing surface).
@@ -64,6 +65,7 @@ pub fn run() {
             dev_fallback::dev_fallback_status,
             upload_cmd::upload_file,
             upload_cmd::upload_bytes,
+            upload_cmd::source_exists,
             extract_cmd::extract_fixture,
             banner_audit::__t1_banner_audit,
             wiki_cmd::wiki_write_entry,

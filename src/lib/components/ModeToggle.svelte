@@ -143,12 +143,11 @@
     <div class="login-hint" role="note">
       <strong class="hint-title">이 버튼이 하는 일</strong>
       <ul>
-        <li>먼저 이 PC에 Codex 로그인이 되어 있는지 읽기 전용으로 확인합니다.</li>
+        <li>먼저 <code>codex login status</code>에 해당하는 상태를 확인합니다.</li>
         <li>이미 로그인되어 있으면 브라우저를 열지 않고 자동 모드만 켭니다.</li>
-        <li>로그인이 필요하면 ChatGPT 공식 로그인 페이지와 확인 코드를 보여 줍니다.</li>
-        <li>앱은 아이디·비밀번호를 받지 않고, 인증 파일을 만들거나 고치지 않습니다.</li>
+        <li>로그인이 필요하면 공식 로그인 페이지와 확인 코드를 보여 줍니다.</li>
       </ul>
-      <p>Codex CLI가 아직 없다면 아래 안내대로 먼저 설치해야 합니다. 자동 모드가 막혀도 후보별 복붙 모드는 그대로 사용할 수 있습니다.</p>
+      <p>Codex 앱 설치는 필수가 아닙니다. CLI 로그인이 안 되거나 자동 연결이 막혀도 복붙 모드는 그대로 사용할 수 있습니다.</p>
     </div>
 
     <!-- 보조 경로: 코드 입력 방식이 막힌 드문 환경을 위한 브라우저 콜백(legacy) 흐름.
@@ -167,10 +166,8 @@
         {#if modeStore.defaultLoginUnfinished}
           <strong>코드가 표시되지 않았거나 로그인이 끝나지 않았나요?</strong>
         {/if}
-        대부분은 위 [ChatGPT로 로그인]만으로 충분합니다. 코드 입력 방식이 동작하지
-        않는 드문 환경에서는 이 방식을 쓰세요. codex가 브라우저를 직접 열어 로그인을
-        진행합니다. 이 방식도 아이디·비밀번호를 앱에 입력하지 않으며, 앱은 인증 파일을
-        직접 만들거나 고치지 않습니다.
+        대부분은 위 [ChatGPT로 로그인]만으로 충분합니다. 코드 입력이 막힌 환경에서만
+        이 방식을 쓰세요.
       </span>
     </div>
   </div>
@@ -254,8 +251,7 @@
     <div class="guide" role="note">
       <strong>Codex CLI가 아직 없습니다.</strong>
       <p>
-        앱은 Codex를 자동 설치하지 않습니다. 자동 LLM 모드를 쓰려면 PowerShell에서
-        아래 순서로 한 번만 직접 설정한 뒤 [다시 검출]을 누르세요.
+        자동 LLM 모드를 쓰려면 PowerShell에서 아래 순서로 한 번만 설정한 뒤 [다시 검출]을 누르세요.
       </p>
       <ol>
         <li>
@@ -263,7 +259,7 @@
           설치 후 <code>node -v</code>, <code>npm -v</code> 확인
         </li>
         <li><code>npm i -g @openai/codex</code></li>
-        <li><code>codex login</code></li>
+        <li><code>codex login status</code> 확인 후, 로그인 전이면 <code>codex login</code></li>
       </ol>
       <p>설치하지 않아도 기본 <strong>후보별 복붙 모드</strong>로 정리·검증은 계속할 수 있습니다.</p>
     </div>
